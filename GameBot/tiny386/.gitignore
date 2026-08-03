@@ -10,14 +10,17 @@
 *.img.zst
 *.zst
 
-# ...except the two drives win95all.ini actually boots. These are 90 MB and
-# 95 MB -- over GitHub's 50 MB warning threshold but under its 100 MB hard
-# limit -- and are committed deliberately so a clone can boot without hunting
-# for them. Note hdc (win95_d_drive_cc.img, 99 MB) is also uncommented in
-# win95all.ini and is NOT here; add it the same way if it turns out to be
-# required rather than optional.
-!win95_c_drive.img
-!win95_d_drive_all.img
+# ...except the two drives win95all.ini boots, shipped COMPRESSED. main.js
+# decompresses *.img.zst in the browser (see unzstdBytes), so the raw .img
+# files are not needed in the repo at all: 42.6 + 42.9 MB instead of 90 + 95,
+# and both sit under GitHub's 50 MB warning threshold rather than over it.
+#
+# Compressed with an 8 MiB window on purpose. unzstd.wasm allocates the
+# frame's window at decode time in the browser, and a default --ultra -22
+# window of 128 MiB may fail there -- which presents as a corrupt disk image,
+# not as a compression setting. Keep wlog at 23 when recompressing.
+!win95_c_drive.img.zst
+!win95_d_drive_all.img.zst
 
 # The wasm and firmware blobs are REQUIRED AT RUNTIME, not optional build
 # output: index.html fetches tiny386.wasm, unzstd.wasm, bios.bin and vgabios.bin
