@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>beZerk Revived</title>
+        <link rel="stylesheet" href="98.css" />
+        <style>
+            body {
+                background: #c0c0c0;
+            }
+            table {
+                background: inherit;
+            }
+            hr {
+                width: 20%;
+                margin-left: 0;
+            }
+            /* Button rows under the canvas. Wraps instead of forcing the
+               window wider, and max-width pins the rows to the canvas so a
+               long row can never stretch the box past the screen. */
+            .controls-row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px;
+                align-items: center;
+                max-width: 720px;
+                margin: 6px 0;
+            }
+            .window {
+                display: inline-block;
+                -webkit-user-select: none;
+                -moz-user-select: none;
+                -ms-user-select: none;
+                user-select: none;
+            }
+        </style>
+        <style>
+          #virtual-kb {
+              background: #d1d4d9; padding: 10px;
+              display: none; flex-direction: column; gap: 8px;
+              user-select: none; font-family: sans-serif;
+          }
+          .kb-row { display: flex; justify-content: center; gap: 5px; }
+          .key {
+              background: #fff; border: none; border-radius: 4px;
+              padding: 12px 0; min-width: 0px; width: 35px; text-align: center;
+              cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+          }
+          .key.space { width: 280px; }
+          .key.fkey { width: 35px; background: #abb2bb; }
+          .key.wide { width: 52.5px; background: #abb2bb; }
+          .key:active { background: #ced4da; }
+          /* Held modifiers. "latched" releases itself after the next ordinary
+             key; "locked" stays down until clicked off again. */
+          .key.kb-latched { background: #7ea6e0; color: #fff; }
+          .key.kb-locked  { background: #2f5f9e; color: #fff; }
+        </style>
+    </head>
+    <body>
+        <hr>
+        <!-- Page-level toolbar. Everything here is global; per-machine controls
+             live inside each client window. -->
+        <div class="window" id="win0">
+            <div class="title-bar" id="tit0">
+                <div class="title-bar-text">beZerk Revived / Tiny386 / WebAssembly</div>
+            </div>
+            <div class="window-body">
+                <div class="controls-row">
+                    <label for="clientcount">Clients:</label>
+                    <input type="number" id="clientcount" value="1" min="1" max="100"
+                           style="width: 60px;"
+                           title="How many emulated PCs to open. They share one virtual network, so they can all join the same game. Anything past a handful will be very slow -- each is a full 386 with its own RAM.">
+                    <button onclick="spawn_clients()"
+                            title="Open that many client windows. They are added to the ones already open.">Create</button>
+                    <button onclick="close_all_clients()"
+                            title="Stop and remove every client window.">Close All</button>
+                    <!-- 98.css hides the real checkbox (opacity:0, position:fixed)
+                         and paints the Win98 box with "input + label::before".
+                         That is an adjacent-sibling rule, so the input must sit
+                         BEFORE the label as its sibling -- nesting it inside the
+                         label matches nothing and the box never appears. -->
+                    <input type="checkbox" id="autostart">
+                    <label for="autostart"
+                           title="Boot each PC as soon as its window is created, instead of waiting for you to press Start on each one. They share one disk download, so starting several together is no slower than starting one.">Auto-start</label>
+                    <span id="clientstatus" style="margin-left: 8px;"></span>
+                </div>
+                <div class="controls-row">
+                    <button id="btn-log" onclick="toggle_log()"
+                            title="Show or hide the log panel. It keeps recording either way, so nothing is missed while hidden.">Show Log</button>
+                    <button id="btn-autoscroll" onclick="toggle_autoscroll()"
+                            title="When off, the log stops jumping to the newest line so you can scroll back while the game runs.">Autoscroll: On</button>
+                    <button onclick="toggle_keyboard()"
+                            title="Show or hide the on-screen keyboard. Keys go to the last client window you clicked.">Keyboard</button>
+                    <button id="btn-reload-server" onclick="reload_server()"
+                            title="Re-load BOTH game servers (Cosmic Consensus and Get The Picture) without restarting the emulators. Keeps whichever server the dropdown has selected. Applies to new connections; exit to the room list and rejoin to pick it up.">Reload Server</button>
+                    <button onclick="toggle_about()"
+                            title="Credits for beZerk Revived and Tiny386.">About</button>
+                    <label style="margin-left: 8px;" for="gameselect">Server:</label>
+                    <select id="gameselect"
+                            title="Which game server answers NEW connections. Games already running keep the server they started on, so switch from the title screen. Same as the console's GAME command.">
+                        <option value="cosmic">Cosmic Consensus</option>
+                        <option value="gtp">Get The Picture</option>
+                        <option value="acro">Acrophobia</option>
+                        <option value="ydkj">You Don't Know Jack: Net Show</option>
+                    </select>
+                </div>
+                <textarea id="logarea" rows="10" cols="98" style="font-family: monospace; background: inherit; display: none;" readonly></textarea>
+                <!-- Cisco-style server console. Output goes into the log above,
+                     so opening the log is how you read replies. Hidden and
+                     shown alongside the log by toggle_log(). -->
+                <div class="controls-row" id="consolerow" style="display: none;">
+                    <span style="font-family: monospace;">cosmic&gt;</span>
+                    <input type="text" id="consoleinput" spellcheck="false"
+                           autocomplete="off" autocapitalize="off"
+                           style="font-family: monospace; flex: 1 1 auto; min-width: 0;"
+                           title="Server console. Enter runs a command, Tab completes, ? lists what is valid here, Up/Down walks history. Abbreviations work: STA = STATUS. Output appears in the log above.">
+                </div>
+            </div>
+        </div>
+        <!-- Client windows are appended here by spawn_clients(). -->
+        <div id="clients"></div>
+        <div class="window" id="win4" style="display: none">
+            <div class="title-bar" id="tit4">
+                <div class="title-bar-text">About beZerk Revived</div>
+                <div class="title-bar-controls">
+                    <button aria-label="Close" onclick="toggle_about()" title="Close"></button>
+                </div>
+            </div>
+            <div class="window-body" id="about-body">
+                <p><strong>beZerk Revived</strong></p>
+                <ul>
+                    <li>NonaSuomy</li>
+                    <li>GruffTech</li>
+                    <li>SecondSight</li>
+                </ul>
+                <hr>
+                <p><strong>Tiny386</strong> &mdash; 386 PC emulator, compiled to WebAssembly</p>
+                <ul>
+                    <li>hchunhui</li>
+                </ul>
+                <div style="text-align: right; margin-top: 12px;">
+                    <button onclick="toggle_about()" title="Close">OK</button>
+                </div>
+            </div>
+        </div>
+        <div class="window" id="win3" style="display: none">
+            <div class="title-bar" id="tit3">
+                <div class="title-bar-text">Keyboard</div>
+                <div class="title-bar-controls">
+                    <button aria-label="Close" onclick="toggle_keyboard()" title="Close the on-screen keyboard"></button>
+                </div>
+            </div>
+            <div class="window-body">
+                <div id="virtual-kb">
+                    <div class="kb-row" id="row1"></div>
+                    <div class="kb-row" id="row2"></div>
+                    <div class="kb-row" id="row3"></div>
+                    <div class="kb-row" id="row4"></div>
+                    <div class="kb-row" id="row5"></div>
+                    <div class="kb-row" id="row6"></div>
+                </div>
+            </div>
+        </div>
+        <script type="importmap">
+            {
+                "imports": {
+                    "tcpip": "https://unpkg.com/tcpip/dist/index.js",
+                    "@tcpip/dns": "https://unpkg.com/@tcpip/dns/dist/index.js",
+                    "@tcpip/wire": "https://unpkg.com/@tcpip/wire/dist/index.js",
+                    "@tcpip/transport": "https://unpkg.com/@tcpip/transport/dist/index.js",
+                    "@tcpip/http": "https://unpkg.com/@tcpip/http/dist/index.js",
+                    "@tcpip/dhcp": "https://unpkg.com/@tcpip/dhcp/dist/index.js",
+                    "@bjorn3/browser_wasi_shim": "https://unpkg.com/@bjorn3/browser_wasi_shim"
+                }
+            }
+        </script>
+        <script src="unzstd.js"></script>
+        <script id="gtp-server-script" src="gtp-server.js"></script>
+        <script id="acro-server-script" src="acro-server.js"></script>
+        <script id="ydkj-server-script" src="ydkj-server.js"></script>
+        <script id="cosmic-server-script" src="cosmic-server.js"></script>
+        <script src="main.js"></script>
+        <script>
+            // When off, the log keeps filling but the view stays put, so you
+            // can read back through it while the game is still running.
+            // On window (not a bare `let`) so cosmic-server.js's console->log
+            // mirror can read the same flag; a top-level `let` in a classic
+            // script is not exposed as a window property.
+            window.log_autoscroll = true;
+
+            function toggle_autoscroll()
+            {
+                window.log_autoscroll = !window.log_autoscroll;
+                const btn = document.getElementById('btn-autoscroll');
+                btn.textContent = 'Autoscroll: ' + (window.log_autoscroll ? 'On' : 'Off');
+                if (window.log_autoscroll) {
+                    const o = document.getElementById('logarea');
+                    o.scrollTop = o.scrollHeight;
+                }
+            }
+
+            // ── multiple clients ─────────────────────────────────────────
+            // Each entry is one emulated PC: { id, win, canvas, inst }. They
+            // all attach to the single shared network built by main.js's
+            // ensureNetwork(), so they sit on one Ethernet segment and can
+            // join each other's games.
+            const clients = [];
+            let clientSeq = 0;
+            // Which window the on-screen keyboard types into: the last one
+            // whose title bar or screen was clicked.
+            let activeClient = null;
+
+            function setActive(c) {
+                // Drop any held Shift/Ctrl/Alt/Win on the machine we are
+                // leaving, so a latched modifier cannot stick down on a client
+                // the keyboard no longer points at.
+                if (activeClient !== c && window.kbReleaseAll) window.kbReleaseAll();
+                activeClient = c;
+                for (const o of clients) {
+                    o.win.querySelector('.title-bar').className =
+                        (o === c) ? 'title-bar' : 'title-bar inactive';
+                }
+            }
+
+            function clientStatus() {
+                const el = document.getElementById('clientstatus');
+                const running = clients.filter(c => c.inst !== null).length;
+                el.textContent = clients.length
+                    ? `${clients.length} open, ${running} running`
+                    : '';
+            }
+
+            function spawn_clients() {
+                const n = Math.max(1, Math.min(100, parseInt(
+                    document.getElementById('clientcount').value, 10) || 1));
+                const auto = document.getElementById('autostart').checked;
+                const made = [];
+                for (let i = 0; i < n; i++) made.push(spawn_one_client());
+                if (auto) {
+                    // Boot them in creation order. main.js dedupes the disk
+                    // image download across VMs, so the second and later
+                    // machines wait on the first one's fetch instead of
+                    // pulling their own copy -- starting together is safe.
+                    // The last one created ends up active, matching what
+                    // pressing Start on each in turn would have done.
+                    for (const c of made) c.start();
+                }
+                clientStatus();
+            }
+
+            function spawn_one_client() {
+                const id = ++clientSeq;
+                const c = { id, win: null, canvas: null, inst: null };
+
+                const win = document.createElement('div');
+                win.className = 'window';
+                win.innerHTML =
+                    '<div class="title-bar">' +
+                      '<div class="title-bar-text">Client ' + id + '</div>' +
+                      '<div class="title-bar-controls">' +
+                        '<button aria-label="Minimize" title="Dock this window back into the page"></button>' +
+                        '<button aria-label="Maximize" title="Fullscreen this client\'s screen. Press Esc to exit."></button>' +
+                        '<button aria-label="Close" title="Stop this client and remove its window"></button>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="window-body">' +
+                      '<center><canvas width="720" height="480" style="background-color:#000000;"></canvas></center>' +
+                      '<div class="controls-row">' +
+                        '<select title="Which game disc this PC boots into. Pick before pressing Start.">' +
+                          '<option value="win95all.ini">beZerk Revived</option>' +
+                          '<option value="win95cc.ini">Cosmic Consensus</option>' +
+                          '<option value="win95a.ini">Acrophobia</option>' +
+                          '<option value="win95gtp.ini">Get The Picture</option>' +
+                          '<option value="win95ns.ini">Net Show</option>' +
+                        '</select>' +
+                        '<button data-act="start" title="Boot this PC with the selected game.">Start</button>' +
+                        '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +
+                        '<button data-act="grab" title="Lock the mouse to this screen. Press Esc to release.">Grab</button>' +
+                        '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
+                        '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
+                        '<button data-act="rmb" title="Send a right-click to this PC.">Right-Click</button>' +
+                      '</div>' +
+                    '</div>';
+
+                document.getElementById('clients').appendChild(win);
+                c.win = win;
+                c.canvas = win.querySelector('canvas');
+                const sel = win.querySelector('select');
+                const [btnMin, btnMax, btnClose] = win.querySelectorAll('.title-bar-controls button');
+
+                win.addEventListener('mousedown', () => setActive(c));
+
+                // Maximize goes fullscreen rather than repositioning the
+                // window -- with many clients open, fullscreening the one you
+                // are looking at is what you actually want.
+                btnMax.addEventListener('click', () => fullscreenClient(c));
+                btnClose.addEventListener('click', () => close_client(c));
+                // drag() handles btnMin itself (docks the window back into the
+                // page flow); pass it through and keep btnMax for ourselves.
+                drag(win, win.querySelector('.title-bar'), btnMin, null);
+
+                // Exposed on the client so spawn_clients() can boot it for the
+                // auto-start checkbox without going through a synthetic click.
+                c.start = () => {
+                    if (c.inst !== null) return;
+                    const inifile = sel.value;
+                    let wasm_name = 'tiny386.wasm';
+                    if (inifile == 'linux-amd64.ini') wasm_name = 'tinyamd64.wasm';
+                    c.inst = get_tiny386(c.canvas, wasm_name);
+                    const o = document.getElementById('logarea');
+                    // Every client shares one log pane, so prefix its lines --
+                    // otherwise interleaved output from several PCs is unreadable.
+                    c.inst.set_logger(function (s) {
+                        const tagged = clients.length > 1 ? s.replace(/^/gm, '[' + id + '] ') : s;
+                        const len = o.value.length;
+                        if (len > 40960)
+                            o.value = o.value.substring(len - 40960, len) + tagged;
+                        else
+                            o.value += tagged;
+                        if (window.log_autoscroll)
+                            o.scrollTop = o.scrollHeight;
+                    });
+                    c.inst.start(inifile);
+                    setActive(c);
+                    clientStatus();
+                };
+                win.querySelector('[data-act="start"]').addEventListener('click', c.start);
+
+                win.querySelector('[data-act="stop"]').addEventListener('click', () => stop_client(c));
+                win.querySelector('[data-act="grab"]').addEventListener('click', () => {
+                    c.canvas.tabIndex = 1; c.canvas.focus(); c.canvas.requestPointerLock();
+                });
+                win.querySelector('[data-act="full"]').addEventListener('click', () => fullscreenClient(c));
+                win.querySelector('[data-act="cad"]').addEventListener('click', () => {
+                    if (!c.inst) return;
+                    c.inst.send_kbd(1, 0x1d); c.inst.send_kbd(1, 0x38); c.inst.send_kbd(1, 0x53);
+                    c.inst.send_kbd(0, 0x53); c.inst.send_kbd(0, 0x38); c.inst.send_kbd(0, 0x1d);
+                });
+                win.querySelector('[data-act="rmb"]').addEventListener('click', () => {
+                    if (!c.inst) return;
+                    c.inst.send_mouse(0, 0, 0, 2);
+                    c.inst.send_mouse(0, 0, 0, 0);
+                });
+
+                clients.push(c);
+                if (!activeClient) setActive(c);
+                return c;
+            }
+
+            function fullscreenClient(c) {
+                c.canvas.tabIndex = 1;
+                c.canvas.focus();
+                c.canvas.requestFullscreen();
+                c.canvas.style.cursor = 'none';
+            }
+
+            function stop_client(c) {
+                if (c.inst !== null) {
+                    // main.js detaches this VM from the shared segment on stop,
+                    // so the hub stops copying frames into a dead instance.
+                    c.inst.stop();
+                    c.inst = null;
+                }
+                clientStatus();
+            }
+
+            function close_client(c) {
+                stop_client(c);
+                c.win.remove();
+                const i = clients.indexOf(c);
+                if (i >= 0) clients.splice(i, 1);
+                if (activeClient === c) activeClient = clients[0] || null;
+                clientStatus();
+            }
+
+            function close_all_clients() {
+                for (const c of [...clients]) close_client(c);
+            }
+
+            function toggle_keyboard()
+            {
+                let kbwin = document.getElementById('win3');
+                if (kbwin.style.display === 'none')
+                    kbwin.style.display = 'block';
+                else
+                    kbwin.style.display = 'none';
+            }
+
+            function toggle_about()
+            {
+                let win = document.getElementById('win4');
+                const showing = win.style.display === 'none';
+                win.style.display = showing ? 'block' : 'none';
+                if (showing) {
+                    // Absolute coords are document-relative, so a fixed spot
+                    // can land off-screen once the page is scrolled. Centre it
+                    // on the current viewport instead.
+                    win.style.position = 'absolute';
+                    const w = win.offsetWidth || 300;
+                    const h = win.offsetHeight || 200;
+                    const left = window.scrollX + Math.max(10, (window.innerWidth - w) / 2);
+                    const top = window.scrollY + Math.max(10, (window.innerHeight - h) / 3);
+                    win.style.left = Math.round(left) + 'px';
+                    win.style.top = Math.round(top) + 'px';
+                }
+            }
+
+            // The log starts hidden so the emulator sits right above the
+            // buttons; the textarea keeps filling in the background either
+            // way, so nothing is lost while it is collapsed.
+            function toggle_log()
+            {
+                const log = document.getElementById('logarea');
+                const btn = document.getElementById('btn-log');
+                const hidden = log.style.display === 'none';
+                log.style.display = hidden ? '' : 'none';
+                // The console writes its replies into the log, so showing it
+                // while the log is hidden would swallow every answer.
+                document.getElementById('consolerow').style.display = hidden ? '' : 'none';
+                btn.textContent = hidden ? 'Hide Log' : 'Show Log';
+                if (hidden) document.getElementById('consoleinput').focus();
+                // Jump to the newest output when opening, since it has been
+                // scrolling along unseen -- unless autoscroll is off, in which
+                // case leaving the view where it was is the whole point.
+                if (hidden && window.log_autoscroll) log.scrollTop = log.scrollHeight;
+            }
+
+            // ── server console ─────────────────────────────────────────────
+            //
+            // Front end for window.cosmicConsole in cosmic-server.js. The
+            // Python build gets readline for this; here the key handling is
+            // ours, but the behaviour is the same:
+            //   Enter     run the line
+            //   Tab       complete command / sub-command / flag
+            //   ?         show what is valid at this point, without running
+            //   Up/Down   walk history
+            // Everything is written into the log textarea rather than a
+            // separate pane, so console output interleaves with server output
+            // in the order it actually happened.
+            // ── game-server selector ───────────────────────────────────────
+            //
+            // Two-way with the console's GAME command: picking here calls the
+            // same setter the command does, and cosmic-server.js calls back
+            // through onActiveGameProfileChange so a console switch moves the
+            // dropdown too. Without that the two would drift and the box would
+            // claim a server that was not actually selected.
+            {
+                const sel = document.getElementById('gameselect');
+                const LABEL = {
+                    cosmic: 'Cosmic Consensus',
+                    gtp: 'Get The Picture',
+                    acro: 'Acrophobia',
+                    ydkj: "You Don't Know Jack: Net Show",
+                };
+                // profile -> the global its server file publishes, so the box
+                // can refuse a pick whose script never loaded instead of
+                // silently handing the connection to Cosmic.
+                const HANDLER = {
+                    gtp: 'gtpHandleGameConnection',
+                    acro: 'acroHandleGameConnection',
+                    ydkj: 'ydkjHandleGameConnection',
+                };
+                const NOTE = {
+                    gtp: 'Lobby + record only: everything past RS is logged, not answered.',
+                    acro: 'Ported from Acrobot; never run against a real client yet.',
+                    ydkj: 'HTTP only -- game-port connections are refused by design.',
+                };
+
+                // Same sink the console front end uses. dolog() lives inside
+                // get_tiny386's closure in main.js and is not reachable here.
+                function selOut(text) {
+                    const o = document.getElementById('logarea');
+                    o.value += String(text) + '\n';
+                    if (window.log_autoscroll) o.scrollTop = o.scrollHeight;
+                }
+
+                window.onActiveGameProfileChange = (profile) => { sel.value = profile; };
+
+                sel.addEventListener('change', () => {
+                    const want = sel.value;
+                    const hook = HANDLER[want];
+                    if (hook && !window[hook]) {
+                        selOut('[game] ' + LABEL[want] + ' server file is not loaded -- reload the page.');
+                        sel.value = window.getActiveGameProfile ? window.getActiveGameProfile() : 'cosmic';
+                        return;
+                    }
+                    if (!window.setActiveGameProfile) {
+                        selOut('[game] Server code is too old for the selector -- press Reload Server.');
+                        sel.value = 'cosmic';
+                        return;
+                    }
+                    window.setActiveGameProfile(want);
+                    selOut('[game] New connections -> ' + LABEL[want] + '.');
+                    if (NOTE[want]) selOut('[game] ' + NOTE[want]);
+                    selOut('[game] Games already in progress keep the server they started on.');
+                });
+
+                // Reflect whatever the server already has -- a reload of
+                // cosmic-server.js resets it to Cosmic, and the box has to say so.
+                if (window.getActiveGameProfile) sel.value = window.getActiveGameProfile();
+            }
+
+            {
+                const input = document.getElementById('consoleinput');
+                const history = [];
+                let histPos = 0;   // == history.length means "on the fresh line"
+
+                function conOut(text) {
+                    const o = document.getElementById('logarea');
+                    const s = String(text);
+                    o.value += (s.endsWith('\n') ? s : s + '\n');
+                    if (window.log_autoscroll) o.scrollTop = o.scrollHeight;
+                }
+
+                function con() {
+                    // Looked up per keystroke, never cached: Reload Server
+                    // republishes window.cosmicConsole, and a cached reference
+                    // would keep driving the old module.
+                    return window.cosmicConsole;
+                }
+
+                input.addEventListener('keydown', (e) => {
+                    const c = con();
+                    if (!c) {
+                        if (e.key === 'Enter') conOut('[console] server not loaded yet');
+                        return;
+                    }
+
+                    if (e.key === 'Enter') {
+                        const line = input.value;
+                        input.value = '';
+                        if (!line.trim()) return;
+                        history.push(line);
+                        histPos = history.length;
+                        conOut(c.prompt + line);
+                        Promise.resolve(c.exec(line, conOut))
+                            .catch((err) => conOut('[console] error: ' + err));
+                        return;
+                    }
+
+                    if (e.key === 'Tab') {
+                        e.preventDefault();
+                        const r = c.complete(input.value);
+                        input.value = r.buffer;
+                        // Ambiguous: readline prints the candidates and leaves
+                        // the line extended to their common prefix.
+                        if (r.matches.length) conOut('  ' + r.matches.join('  '));
+                        return;
+                    }
+
+                    if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        if (histPos > 0) input.value = history[--histPos];
+                        return;
+                    }
+
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (histPos < history.length - 1) input.value = history[++histPos];
+                        else { histPos = history.length; input.value = ''; }
+                        return;
+                    }
+                });
+
+                // "?" acts immediately and is never inserted -- that is the
+                // whole point of IOS-style help. Handled on keypress so the
+                // character is suppressed before it reaches the field.
+                input.addEventListener('keypress', (e) => {
+                    if (e.key !== '?') return;
+                    const c = con();
+                    if (!c) return;
+                    e.preventDefault();
+                    const words = input.value.replace(/^\s+/, '').split(/\s+/).filter((w) => w.length);
+                    // A trailing space means "what comes next", so the partial
+                    // word is not part of the context.
+                    const ctx = /\s$/.test(input.value) ? words : words.slice(0, -1);
+                    conOut(c.prompt + input.value + '?');
+                    conOut(c.help(ctx));
+                });
+            }
+
+            // Re-fetch and re-run cosmic-server.js in place. The emulator, the
+            // virtual network stack and the already-bound TCP listener are all
+            // untouched -- cosmic-server.js is wrapped in an IIFE that
+            // republishes window.handleGameConnection / window.cosmicHttpHandler
+            // on each load, and both the accept loop and the HTTP server look
+            // those up fresh per request. So new connections get the new code
+            // while the VM keeps running.
+            //
+            // Connections that are already open keep the old logic until they
+            // reconnect -- reloading mid-game will not retrofit a running game.
+            async function reload_server()
+            {
+                const btn = document.getElementById('btn-reload-server');
+                const original = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'Reloading...';
+                let ok = false;
+                try {
+                    ok = await window.reloadCosmicServer();
+                } catch (e) {
+                    console.error('[reload] failed:', e);
+                }
+                btn.textContent = ok ? 'Reloaded' : 'Reload failed';
+                setTimeout(function () {
+                    btn.textContent = original;
+                    btn.disabled = false;
+                }, 1500);
+            }
+        </script>
+        <script>
+          (function() {
+          const kb = document.getElementById('virtual-kb');
+          const handle = document.getElementById('kb-handle');
+
+          const key2code = {
+              "Esc": 0x0001,
+              "1": 0x0002, "2": 0x0003, "3": 0x0004, "4": 0x0005, "5": 0x0006,
+              "6": 0x0007, "7": 0x0008, "8": 0x0009, "9": 0x000a, "0": 0x000b,
+              "-": 0x000c, "=": 0x000d, "Back": 0x000e, "Tab": 0x000f,
+              "Q": 0x0010, "W": 0x0011, "E": 0x0012, "R": 0x0013, "T": 0x0014,
+              "Y": 0x0015, "U": 0x0016, "I": 0x0017, "O": 0x0018, "P": 0x0019,
+              "[": 0x001a, "]": 0x001b, "Enter": 0x001c, "Ctrl": 0x001d,
+              "A": 0x001e, "S": 0x001f, "D": 0x0020, "F": 0x0021, "G": 0x0022,
+              "H": 0x0023, "J": 0x0024, "K": 0x0025, "L": 0x0026, ";": 0x0027,
+              "'": 0x0028, "`": 0x0029, "Shift": 0x002a, "\\": 0x002b,
+              "Z": 0x002c, "X": 0x002d, "C": 0x002e, "V": 0x002f, "B": 0x0030,
+              "N": 0x0031, "M": 0x0032, ",": 0x0033, ".": 0x0034, "/": 0x0035,
+              "Alt": 0x0038, "Space": 0x0039, "Caps": 0x003a,
+              "F1": 0x003b, "F2": 0x003c, "F3": 0x003d, "F4": 0x003e, "F5": 0x003f,
+              "F6": 0x0040, "F7": 0x0041, "F8": 0x0042, "F9": 0x0043, "F10": 0x0044,
+              "F11": 0x0057, "F12": 0x0058,
+              "Home": 0xe047, "Up": 0xe048, "PgUp": 0xe049, "Left": 0xe04b,
+              "Right": 0xe04d, "End": 0xe04f, "Down": 0xe050, "PgDn": 0xe051,
+              "Insert": 0xe052, "Del": 0xe053,
+              // Left Windows key: extended scancode E0 5B, same encoding as the
+              // other 0xe0xx navigation keys above.
+              "Win": 0xe05b,
+          };
+
+          // Keys whose printed face differs from their key2code name. The
+          // handlers look up data-val, so the label is free to be anything.
+          const keyLabel = {
+              // Single code point, not a ZWJ sequence -- renders as one glyph
+              // everywhere rather than risking a split into two.
+              "Win": "\u{1F680}",  // rocket
+          };
+
+          // Keys that latch rather than tapping. Caps is deliberately absent:
+          // it is a real tap key that toggles state inside the guest OS.
+          const MODIFIERS = new Set(["Shift", "Ctrl", "Alt", "Win"]);
+
+          // Second face of each non-letter key, printed while Shift is held.
+          // US layout, matching what the guest will actually produce from
+          // these scancodes -- the key face is cosmetic, the scancode sent is
+          // always the unshifted one from key2code.
+          const shiftFace = {
+              "`": "~", "1": "!", "2": "@", "3": "#", "4": "$", "5": "%",
+              "6": "^", "7": "&", "8": "*", "9": "(", "0": ")", "-": "_",
+              "=": "+", "[": "{", "]": "}", "\\": "|", ";": ":", "'": "\"",
+              ",": "<", ".": ">", "/": "?",
+          };
+
+          const layout = [
+              ["Esc", "F1", "F2", "F3", "F4", "F5", "F6",
+               "F7", "F8", "F9", "F10", "F11", "F12", "PgUp", "PgDn"],
+              [..."`1234567890-=".split(""), "Back"],
+              ["Tab", ..."QWERTYUIOP[]\\".split("")],
+              ["Caps", ..."ASDFGHJKL;'".split(""), "Enter"],
+              ["Shift", ..."ZXCVBNM,./".split(""), "Up"],
+              // Win sits between Ctrl and Alt, where it is on a real keyboard.
+              ["Ctrl", "Win", "Alt", "Space", "Del", "Left", "Down", "Right"],
+          ];
+
+          layout.forEach((row, i) => {
+              const rowEl = document.getElementById(`row${i+1}`);
+              row.forEach(key => {
+                  const btn = document.createElement('button');
+                  if (key.length === 1)
+                      btn.className = 'key';
+                  else if (key[0] === 'F' || key == 'Esc')
+                      btn.className = 'key fkey';
+                  else if (key === 'Space')
+                      btn.className = 'key space';
+                  else if (key === 'Win')
+                      btn.className = 'key';
+                  else
+                      btn.className = 'key wide';
+                  btn.textContent = keyLabel[key] || key;
+                  // Win is both a relabelled key and a modifier, so build the
+                  // tooltip from whichever parts apply rather than branching.
+                  const tip = [];
+                  if (keyLabel[key]) tip.push(key);
+                  if (MODIFIERS.has(key))
+                      tip.push('click to hold for the next key, click again to '
+                             + 'lock it down, once more to release');
+                  if (tip.length) btn.title = tip.join(' — ');
+                  btn.setAttribute('data-val', key);
+                  rowEl.appendChild(btn);
+              });
+          });
+
+          // ── modifiers ───────────────────────────────────────────────────
+          //
+          // A modifier cannot work as a plain press-and-release button: the
+          // mouseup fires before you can click the key you wanted to modify,
+          // so Shift+A only ever sent a bare "a" and shortcuts were
+          // impossible. Instead each modifier is a three-state toggle.
+          //
+          //   off -> latched : sent down, releases after the next normal key
+          //   latched -> locked : stays down until you click it again
+          //   locked -> off  : sent up
+          //
+          // Ctrl+Alt+Del is therefore Ctrl, Alt, Del -- both modifiers are
+          // still physically down when Del arrives, then both let go. Locking
+          // is for holding Shift across a run of capitals.
+          const modState = { Shift: 'off', Ctrl: 'off', Alt: 'off', Win: 'off' };
+          // Mirrors the guest's caps lamp so the key faces match what typing
+          // actually produces. Caps itself is an ordinary tap, exactly as on
+          // real hardware -- the OS owns the state, we only track it.
+          let capsOn = false;
+
+          const shiftActive = () => modState.Shift !== 'off';
+
+          function send(down, val) {
+              const code = key2code[val];
+              if (code === undefined) return;
+              if (activeClient && activeClient.inst)
+                  activeClient.inst.send_kbd(down ? 1 : 0, code);
+          }
+
+          function faceFor(val) {
+              if (keyLabel[val]) return keyLabel[val];
+              if (val.length !== 1) return val;
+              if (val >= 'A' && val <= 'Z')
+                  return (shiftActive() !== capsOn) ? val : val.toLowerCase();
+              return shiftActive() && shiftFace[val] ? shiftFace[val] : val;
+          }
+
+          // Repaint every key face and modifier lamp. data-val never changes,
+          // so the scancode lookup is unaffected by what is printed.
+          function refresh() {
+              kb.querySelectorAll('button[data-val]').forEach((btn) => {
+                  const val = btn.getAttribute('data-val');
+                  btn.textContent = faceFor(val);
+                  btn.classList.toggle('kb-latched', modState[val] === 'latched');
+                  btn.classList.toggle('kb-locked',
+                      modState[val] === 'locked' || (val === 'Caps' && capsOn));
+              });
+          }
+
+          function toggleModifier(val) {
+              const s = modState[val];
+              if (s === 'off') { modState[val] = 'latched'; send(1, val); }
+              else if (s === 'latched') { modState[val] = 'locked'; }
+              else { modState[val] = 'off'; send(0, val); }
+              refresh();
+          }
+
+          function releaseLatched() {
+              let changed = false;
+              for (const m of MODIFIERS) {
+                  if (modState[m] === 'latched') {
+                      modState[m] = 'off';
+                      send(0, m);
+                      changed = true;
+                  }
+              }
+              if (changed) refresh();
+          }
+
+          // Let go of everything. Switching the keyboard to a different client
+          // would otherwise strand a held Ctrl on the machine we just left,
+          // with no button showing it and no way to release it.
+          window.kbReleaseAll = function () {
+              let changed = false;
+              for (const m of MODIFIERS) {
+                  if (modState[m] !== 'off') { modState[m] = 'off'; send(0, m); changed = true; }
+              }
+              if (changed) refresh();
+          };
+
+          kb.onmousedown = (e) => {
+              e.preventDefault();
+              const btn = e.target.closest('button');
+              if (!btn) return;
+              const val = btn.getAttribute('data-val');
+              if (MODIFIERS.has(val)) { toggleModifier(val); return; }
+              send(1, val);
+          };
+
+          kb.onmouseup = (e) => {
+              e.preventDefault();
+              const btn = e.target.closest('button');
+              if (!btn) return;
+              const val = btn.getAttribute('data-val');
+              if (MODIFIERS.has(val)) return;   // handled on the way down
+              send(0, val);
+              if (val === 'Caps') capsOn = !capsOn;
+              releaseLatched();
+              if (val === 'Caps') refresh();
+          };
+
+          kb.addEventListener('touchstart', kb.onmousedown, { passive: false });
+          kb.addEventListener('touchend', kb.onmouseup, { passive: false });
+          refresh();
+          kb.style.display = 'flex';
+          })();
+        </script>
+        <script>
+            let zidx = 10;
+            // Starts unset: client title bars are created dynamically and
+            // register themselves with drag() as they appear.
+            let zobj = document.getElementById('tit0');
+            function drag(div, div1, btn1, btn2) {
+                let x, y, dragging = false;
+
+                // A window sitting in the normal page flow is position:static,
+                // and left/top are ignored on a static element -- which is why
+                // the client windows could not be dragged even though drag()
+                // was wired up for them. Promote to absolute at the exact spot
+                // it already occupies, so grabbing the title bar picks the
+                // window up without it jumping first. The Minimize button puts
+                // it back to static (docked into the flow), and the next drag
+                // lifts it out again.
+                function lift() {
+                    if (getComputedStyle(div).position !== 'static') return;
+                    const l = div.offsetLeft, t = div.offsetTop;
+                    div.style.position = 'absolute';
+                    div.style.left = l + 'px';
+                    div.style.top = t + 'px';
+                }
+
+                function f() {
+                    if (!(zobj === undefined)) {
+                        zobj.className = "title-bar inactive";
+                    }
+                    div1.className = "title-bar";
+                    div.style.zIndex = zidx;
+                    zidx++;
+                    zobj = div1;
+                }
+
+                div.addEventListener('focusin', f);
+                div.addEventListener('mousedown', f);
+                div.addEventListener('touchstart', f);
+
+                div1.addEventListener('mousedown', (e) => {
+                    // Not on the Minimize/Maximize/Close buttons -- those sit
+                    // inside the title bar and clicking one should not also
+                    // start a drag.
+                    if (e.target.closest('.title-bar-controls')) return;
+                    lift();
+                    dragging = true;
+                    x = e.clientX - div.offsetLeft;
+                    y = e.clientY - div.offsetTop;
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if (dragging) {
+                        div.style.left = e.clientX - x + 'px';
+                        div.style.top = e.clientY - y + 'px';
+                    }
+                });
+
+                document.addEventListener('mouseup', () => {
+                    dragging = false;
+                });
+
+                div1.addEventListener('touchstart', (e) => {
+                    if (e.target.closest('.title-bar-controls')) return;
+                    lift();
+                    dragging = true;
+                    x = e.changedTouches[0].clientX - div.offsetLeft;
+                    y = e.changedTouches[0].clientY - div.offsetTop;
+                }, { passive: false });
+
+                document.addEventListener('touchend', () => {
+                    dragging = false;
+                });
+
+                document.addEventListener('touchmove', (e) => {
+                    if (dragging) {
+                        div.style.left = e.changedTouches[0].clientX - x + 'px';
+                        div.style.top = e.changedTouches[0].clientY - y + 'px';
+                    }
+                }, { passive: false });
+
+                if (btn1 !== null) {
+                    btn1.addEventListener('click', () => {
+                        div.style.position = 'static';
+                    });
+                }
+
+                if (btn2 !== null) {
+                    btn2.addEventListener('click', () => {
+                        div.style.position = 'absolute';
+                        div.style.left = '50px';
+                        div.style.top = '50px';
+                    });
+                }
+            }
+
+            drag(document.getElementById('win0'), document.getElementById('tit0'), null, null);
+            drag(document.getElementById('win3'), document.getElementById('tit3'), null, null);
+            drag(document.getElementById('win4'), document.getElementById('tit4'), null, null);
+            {
+                const d3 = document.getElementById('win3');
+                d3.style.position = 'absolute';
+                d3.style.left = '50px';
+                d3.style.top = '500px';
+                // The About window needs this too, or it stays position:static
+                // -- sitting in the document flow shoving the page around, and
+                // ignoring drag()'s left/top writes entirely. toggle_about()
+                // re-centres it on each open; this is just the initial state.
+                const d4 = document.getElementById('win4');
+                d4.style.position = 'absolute';
+                d4.style.left = '50px';
+                d4.style.top = '50px';
+            }
+        </script>
+    </body>
+</html>

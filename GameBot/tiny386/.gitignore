@@ -1,0 +1,18 @@
+# Emulator disk images and installer media.
+#
+# These are build/runtime artifacts, not source: win95_extra_files.iso is
+# ~1.2 GB and each win95_*.img is ~100 MB. GitHub rejects any single file over
+# 100 MB outright, and a large blob that does get in stays in history forever
+# even if it is deleted later -- so they are kept out deliberately rather than
+# by oversight. Fetch or rebuild them locally.
+*.img
+*.iso
+*.img.zst
+*.zst
+
+# Built wasm + firmware blobs -- produced from ../../../tiny386 by its Makefile.
+*.wasm
+*.bin
+
+# Timestamped safety copies made while editing.
+.backup-*/
