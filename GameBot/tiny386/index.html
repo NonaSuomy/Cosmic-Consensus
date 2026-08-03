@@ -353,6 +353,9 @@
                         '<button data-act="grab" title="Lock the mouse to this screen, so movement is delivered to the guest instead of moving the host cursor. Ctrl+Alt+G toggles it from the keyboard; Esc releases it. Not available on iOS.">Grab</button>' +
                         '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
                         '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
+                        '<span class="shortcut-hint" style="opacity:0.75; margin-left:8px; white-space:nowrap;">' +
+                          'Ctrl+Alt+G lock/release mouse &middot; Esc release &middot; drag to move, double-tap-drag to click-drag' +
+                        '</span>' +
                         '<button data-act="altf4" title="Send Alt+F4 to this PC, closing whatever window has focus in the guest. Sent to the emulated keyboard, so the guest decides what it means -- it will not stop a truly hung app, and on the desktop it asks Windows to shut down.">Alt+F4</button>' +
                         '<input type="text" data-act="typebox" placeholder="type here -> Enter sends" spellcheck="false" ' +
                           'autocomplete="off" autocapitalize="off" autocorrect="off" ' +
@@ -444,6 +447,16 @@
                     const box = win.querySelector('[data-act="typebox"]');
                     const push = (withReturn) => {
                         if (!c.inst) { conlog('[ui] Start this PC before sending text.'); return; }
+                        // A new index.html against a cached old main.js: GitHub
+                        // Pages caches .js, so the two can arrive out of step.
+                        // Without this it surfaced as a bare
+                        // "c.inst.send_text is not a function".
+                        if (typeof c.inst.send_text !== 'function') {
+                            conlog('[ui] This page has a stale main.js (no send_text). '
+                                 + 'Hard-refresh to pick up the current one: '
+                                 + 'desktop Ctrl+Shift+R, iOS hold Reload -> Request Desktop Site, or clear site data.');
+                            return;
+                        }
                         const text = box.value;
                         if (!text && !withReturn) return;
                         c.inst.send_text(withReturn ? text + '\n' : text);
