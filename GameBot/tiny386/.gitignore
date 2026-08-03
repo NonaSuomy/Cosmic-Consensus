@@ -10,6 +10,15 @@
 *.img.zst
 *.zst
 
+# ...except the two drives win95all.ini actually boots. These are 90 MB and
+# 95 MB -- over GitHub's 50 MB warning threshold but under its 100 MB hard
+# limit -- and are committed deliberately so a clone can boot without hunting
+# for them. Note hdc (win95_d_drive_cc.img, 99 MB) is also uncommented in
+# win95all.ini and is NOT here; add it the same way if it turns out to be
+# required rather than optional.
+!win95_c_drive.img
+!win95_d_drive_all.img
+
 # Built wasm + firmware blobs -- produced from ../../../tiny386 by its Makefile.
 *.wasm
 *.bin
