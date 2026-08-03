@@ -447,6 +447,9 @@ async function reloadServerScript(file, id, expectGlobal) {
     return true;
 }
 
+// Exposed so the page can reload ui.js with the same verified-load logic.
+window.reloadServerScript = reloadServerScript;
+
 async function reloadCosmicServer() {
     try {
         // Which server is selected has to survive the reload. cosmic-server.js
