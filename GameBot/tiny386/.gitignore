@@ -19,9 +19,13 @@
 !win95_c_drive.img
 !win95_d_drive_all.img
 
-# Built wasm + firmware blobs -- produced from ../../../tiny386 by its Makefile.
-*.wasm
-*.bin
+# The wasm and firmware blobs are REQUIRED AT RUNTIME, not optional build
+# output: index.html fetches tiny386.wasm, unzstd.wasm, bios.bin and vgabios.bin
+# on every boot. Ignoring them made a fresh clone fail immediately -- the fetch
+# 404s, the HTML error page comes back instead, and the browser reports
+#     CompileError: expected magic word 00 61 73 6d, found 3c 21 44 4f
+# ("<!DO", i.e. the 404 page). They total ~590 KB, so there is no reason not to
+# ship them.
 
 # Timestamped safety copies made while editing.
 .backup-*/
