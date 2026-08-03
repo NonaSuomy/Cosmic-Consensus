@@ -1006,7 +1006,9 @@ function register_kbdmouse(h, exports)
         if (!document.fullscreenElement) {
             screen.style.cursor = 'default';
         } else {
-            screen.requestPointerLock();
+            // Absent on iOS (all browsers there are WebKit). Calling it
+            // throws and takes the surrounding handler with it.
+            if (screen.requestPointerLock) screen.requestPointerLock();
             if ('keyboard' in navigator &&
                 typeof navigator.keyboard.lock === 'function') {
                 navigator.keyboard.lock();
@@ -1296,15 +1298,57 @@ function loads(files, i, cont) {
     }
 }
 
+// Grow the wasm heap, settling for less rather than failing outright.
+//
+// This used to be a bare memory.grow(1024 * 10) -- a 640 MB request, sized for
+// when mem_size was 128M. Desktop grants it without complaint, so nobody
+// noticed; a memory-constrained browser (iOS Safari, and Chrome on iOS is
+// Safari) throws RangeError instead, and since the caller had no .catch the
+// whole boot vanished with NOTHING logged. The first dolog() came after this
+// line, so the symptom was a page that loaded the game server and then simply
+// stopped.
+//
+// The heap has to hold guest RAM plus every disk image, since loads() copies
+// them in: 32 MB + ~194 MB is about 240 MB for win95all.ini. 640 MB is
+// generous, so try it first (keeping desktop exactly as it was) and step down
+// until something is granted.
+const WASM_HEAP_STEPS_PAGES = [1024 * 10, 1024 * 6, 1024 * 5, 1024 * 4, 1024 * 3];
+
+function growWasmHeap(inst) {
+    let lastErr = null;
+    for (const pages of WASM_HEAP_STEPS_PAGES) {
+        try {
+            inst.exports.memory.grow(pages);
+            const mb = Math.round(pages * 65536 / 1048576);
+            if (pages !== WASM_HEAP_STEPS_PAGES[0]) {
+                dolog('wasm heap: only ' + mb + ' MB available (asked for '
+                      + Math.round(WASM_HEAP_STEPS_PAGES[0] * 65536 / 1048576)
+                      + ' MB); continuing -- a large disk image may not fit\n');
+            }
+            return true;
+        } catch (e) {
+            lastErr = e;
+        }
+    }
+    dolog('wasm heap: could not allocate even '
+          + Math.round(WASM_HEAP_STEPS_PAGES[WASM_HEAP_STEPS_PAGES.length - 1] * 65536 / 1048576)
+          + ' MB (' + (lastErr && lastErr.message) + ') -- this device cannot run the emulator\n');
+    return false;
+}
+
 function start(inifile)
 {
+    dolog('starting emulator (' + inifile + ') ...\n');
     fetch('tiny386.wasm', fetchopt)
-        .then(response => response.arrayBuffer())
+        .then(response => {
+            if (!response.ok) throw new Error('tiny386.wasm: HTTP ' + response.status);
+            return response.arrayBuffer();
+        })
         .then(bytes => WebAssembly.compile(bytes))
         .then(module => new WebAssembly.Instance(module, imports))
         .then(instance1 => {
             instance = instance1;
-            instance.exports.memory.grow(1024 * 10); // 64K * 10K
+            if (!growWasmHeap(instance)) return;
             mem8 = new Uint8Array(instance.exports.memory.buffer);
             dolog('ini file ' + inifile + '\n');
             loads([inifile], 0, () => {
@@ -1432,6 +1476,14 @@ function start(inifile)
                     }
                 });
             });
+        })
+        .catch(err => {
+            // The chain had no .catch at all, so every failure between here
+            // and the first dolog() was an unhandled rejection -- visible only
+            // in devtools, which a phone does not have. Anything that goes
+            // wrong now says so in the log panel.
+            dolog('EMULATOR FAILED TO START: ' + (err && err.message ? err.message : err) + '\n');
+            console.error('[boot] emulator start failed:', err);
         });
 }
 

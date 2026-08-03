@@ -192,6 +192,30 @@
             // Empty the log panel. Deliberately does NOT touch the browser
             // console -- server output goes to both, so a cleared panel still
             // leaves the full history in devtools.
+            // Write into the log panel from anywhere on the page. dolog()
+            // lives inside get_tiny386's closure in main.js and is not
+            // reachable here.
+            function conlog(text)
+            {
+                const o = document.getElementById('logarea');
+                if (!o) return;
+                o.value += String(text) + '\n';
+                if (window.log_autoscroll) o.scrollTop = o.scrollHeight;
+            }
+            window.conlog = conlog;
+
+            // Last-resort visibility. On a phone there is no devtools, so an
+            // uncaught error or a rejected promise is completely silent -- the
+            // page just stops doing anything. Both now land in the log panel.
+            window.addEventListener('error', (e) => {
+                conlog('UNCAUGHT ERROR: ' + (e.message || e.error)
+                       + (e.filename ? '  (' + e.filename + ':' + e.lineno + ')' : ''));
+            });
+            window.addEventListener('unhandledrejection', (e) => {
+                const r = e.reason;
+                conlog('UNHANDLED REJECTION: ' + (r && r.message ? r.message : r));
+            });
+
             function clear_log()
             {
                 const o = document.getElementById('logarea');
@@ -349,7 +373,10 @@
 
                 win.querySelector('[data-act="stop"]').addEventListener('click', () => stop_client(c));
                 win.querySelector('[data-act="grab"]').addEventListener('click', () => {
-                    c.canvas.tabIndex = 1; c.canvas.focus(); c.canvas.requestPointerLock();
+                    c.canvas.tabIndex = 1; c.canvas.focus();
+                    // No pointer lock on iOS -- say so rather than throwing.
+                    if (c.canvas.requestPointerLock) c.canvas.requestPointerLock();
+                    else conlog('[ui] Grab needs pointer lock, which this browser does not support.');
                 });
                 win.querySelector('[data-act="full"]').addEventListener('click', () => fullscreenClient(c));
                 win.querySelector('[data-act="cad"]').addEventListener('click', () => {
@@ -381,7 +408,10 @@
             function fullscreenClient(c) {
                 c.canvas.tabIndex = 1;
                 c.canvas.focus();
-                c.canvas.requestFullscreen();
+                // iPhone Safari has no element fullscreen (iPad does).
+                if (c.canvas.requestFullscreen) c.canvas.requestFullscreen();
+                else if (c.canvas.webkitRequestFullscreen) c.canvas.webkitRequestFullscreen();
+                else conlog('[ui] Fullscreen is not supported by this browser.');
                 c.canvas.style.cursor = 'none';
             }
 
