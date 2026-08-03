@@ -323,6 +323,7 @@
                         '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
                         '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
                         '<button data-act="altf4" title="Send Alt+F4 to this PC, closing whatever window has focus in the guest. Sent to the emulated keyboard, so the guest decides what it means -- it will not stop a truly hung app, and on the desktop it asks Windows to shut down.">Alt+F4</button>' +
+                        '<button data-act="lmb" title="Send a left-click to this PC, wherever the guest pointer currently is. Useful on touch devices, where there is no real mouse button.">Left-Click</button>' +
                         '<button data-act="rmb" title="Send a right-click to this PC.">Right-Click</button>' +
                       '</div>' +
                     '</div>';
@@ -393,6 +394,16 @@
                     if (!c.inst) return;
                     c.inst.send_kbd(1, 0x38); c.inst.send_kbd(1, 0x3e);
                     c.inst.send_kbd(0, 0x3e); c.inst.send_kbd(0, 0x38);
+                });
+                // Press-then-release at the pointer's current position -- the
+                // deltas are 0, so this clicks wherever the guest cursor
+                // already is rather than moving it. Button bits are the DOM
+                // MouseEvent.buttons values the emulator is fed elsewhere
+                // (main.js:946): 1 = left, 2 = right.
+                win.querySelector('[data-act="lmb"]').addEventListener('click', () => {
+                    if (!c.inst) return;
+                    c.inst.send_mouse(0, 0, 0, 1);
+                    c.inst.send_mouse(0, 0, 0, 0);
                 });
                 win.querySelector('[data-act="rmb"]').addEventListener('click', () => {
                     if (!c.inst) return;
