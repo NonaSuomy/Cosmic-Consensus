@@ -579,6 +579,27 @@ const REMOTE_GAME_SERVER = null;
  */
 let relaySeq = 0;
 
+/**
+ * Split on newlines, keeping each "\n" attached to the line before it.
+ *
+ * This was `.split(/(?<=\n)/)`. Lookbehind is ES2018 and Safari only gained
+ * it in 16.4 -- and because it is a regex LITERAL the failure is at parse
+ * time, so the whole of cosmic-server.js was rejected on an older iOS rather
+ * than just this one function misbehaving. The game server simply did not
+ * exist there, which is a very large consequence for a line in the relay path
+ * that is not even reachable while REMOTE_GAME_SERVER is null.
+ */
+function splitKeepingNewlines(text) {
+  const parts = text.split('\n');
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const last = i === parts.length - 1;
+    const piece = last ? parts[i] : parts[i] + '\n';
+    if (piece !== '') out.push(piece);
+  }
+  return out;
+}
+
 async function relayGameConnection(conn) {
   const cfg = REMOTE_GAME_SERVER;
   // Two relays run at once -- the lobby socket and the game socket -- and
@@ -686,8 +707,7 @@ async function relayGameConnection(conn) {
       // that PING and would be answering a question it did not ask. Matched on
       // the token, so the server's own PING/PONG passes through untouched.
       const kaPong = new RegExp(`^PONG\\s+:?${RELAY_KEEPALIVE_TOKEN}$`, 'i');
-      const text = RELAY_DECODER.decode(raw)
-        .split(/(?<=\n)/)
+      const text = splitKeepingNewlines(RELAY_DECODER.decode(raw))
         .filter((l) => !kaPong.test(l.trim()))
         .join('');
 
