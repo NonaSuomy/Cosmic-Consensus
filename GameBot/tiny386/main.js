@@ -942,7 +942,11 @@ function register_kbdmouse(h, exports)
     function mousehandler(event) {
         const x = event.movementX;
         const y = event.movementY;
-        screen.tabIndex = 1;
+        // 0, not 1: a POSITIVE tabindex pulls an element ahead of everything
+        // in natural document order, so the canvases were all visited before
+        // any button and tabbing through the controls did not work. 0 keeps
+        // the canvas focusable but in document order.
+        screen.tabIndex = 0;
         exports.wasm_send_mouse(h, x, y, 0, event.buttons);
     }
 

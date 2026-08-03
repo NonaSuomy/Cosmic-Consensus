@@ -257,29 +257,49 @@
                 conlog('UNHANDLED REJECTION: ' + (r && r.message ? r.message : r));
             });
 
-            // Ctrl+Alt+G toggles pointer lock on the active client.
+            // Host shortcuts, all Ctrl+Alt+<key>, aimed at the active client.
             //
-            // Registered on window in the CAPTURE phase so it runs before the
-            // canvas keydown handler in main.js (which is a bubble-phase
-            // listener on the canvas itself). Without that, the chord would be
-            // forwarded to the guest as well as toggling the lock.
+            // Registered on window in the CAPTURE phase so they run before the
+            // canvas keydown handler in main.js (a bubble-phase listener on the
+            // canvas). Without that, each chord would do its job AND be
+            // forwarded to the guest as a real keypress.
             //
-            // Esc already releases pointer lock -- that is the browser's own
-            // behaviour and cannot be overridden -- so this exists mainly to
-            // re-acquire it without reaching for the mouse.
+            // Ctrl+Alt+<letter> is chosen because Windows 3.x/95-era software
+            // rarely binds it, and Esc -- which the browser reserves for
+            // releasing pointer lock -- stays untouched.
+            const HOST_SHORTCUTS = {
+                KeyG: { what: 'toggle pointer lock', run: (c) => {
+                    if (document.pointerLockElement === c.canvas) document.exitPointerLock();
+                    else if (c.canvas.requestPointerLock) c.canvas.requestPointerLock();
+                    else conlog('[ui] Pointer lock is not supported by this browser.');
+                } },
+                KeyL: { what: 'left click',   run: (c) => click(c, 1, 1) },
+                KeyR: { what: 'right click',  run: (c) => click(c, 2, 1) },
+                KeyD: { what: 'double click', run: (c) => click(c, 1, 2) },
+            };
+
+            // Press/release `times` times with button bit `btn`, at the guest
+            // pointer's current position (deltas are 0, so it does not move).
+            function click(c, btn, times) {
+                if (!c.inst) { conlog('[ui] Start this PC first.'); return; }
+                for (let i = 0; i < times; i++) {
+                    c.inst.send_mouse(0, 0, 0, btn);
+                    c.inst.send_mouse(0, 0, 0, 0);
+                }
+            }
+
             window.addEventListener('keydown', (e) => {
-                if (!e.ctrlKey || !e.altKey || e.code !== 'KeyG') return;
+                if (!e.ctrlKey || !e.altKey) return;
+                const sc = HOST_SHORTCUTS[e.code];
+                if (!sc) return;
                 e.preventDefault();
                 e.stopPropagation();
-                const c = activeClient;   // same script block, declared below; set by then
-                if (!c || !c.canvas) { conlog('[ui] Ctrl+Alt+G: no active client window.'); return; }
-                if (document.pointerLockElement === c.canvas) {
-                    document.exitPointerLock();
-                } else if (c.canvas.requestPointerLock) {
-                    c.canvas.requestPointerLock();
-                } else {
-                    conlog('[ui] Pointer lock is not supported by this browser.');
+                const c = activeClient;
+                if (!c || !c.canvas) {
+                    conlog('[ui] Ctrl+Alt+' + e.code.replace('Key', '') + ': no active client window.');
+                    return;
                 }
+                sc.run(c);
             }, true);
 
             document.addEventListener('pointerlockchange', () => {
@@ -410,8 +430,10 @@
                       // whole row and stops shoving the buttons around when the
                       // window is narrow.
                       '<div class="shortcut-hint" style="opacity:0.7; margin-top:4px; font-size:0.9em;">' +
-                        'Ctrl+Alt+G lock/release mouse &middot; Esc release &middot; ' +
-                        'drag to move the pointer &middot; double-tap-drag to click-drag' +
+                        'Ctrl+Alt+ G lock/release mouse &middot; L left-click &middot; ' +
+                        'R right-click &middot; D double-click &middot; Esc release &middot; ' +
+                        'drag to move the pointer &middot; double-tap-drag to click-drag &middot; ' +
+                        'Tab cycles the buttons' +
                       '</div>' +
                     '</div>';
 
@@ -461,7 +483,7 @@
 
                 win.querySelector('[data-act="stop"]').addEventListener('click', () => stop_client(c));
                 win.querySelector('[data-act="grab"]').addEventListener('click', () => {
-                    c.canvas.tabIndex = 1; c.canvas.focus();
+                    c.canvas.tabIndex = 0; c.canvas.focus();   // 0 keeps natural tab order
                     // No pointer lock on iOS -- say so rather than throwing.
                     if (c.canvas.requestPointerLock) c.canvas.requestPointerLock();
                     else conlog('[ui] Grab needs pointer lock, which this browser does not support.');
@@ -557,7 +579,7 @@
             }
 
             function fullscreenClient(c) {
-                c.canvas.tabIndex = 1;
+                c.canvas.tabIndex = 0;   // see the note in main.js: positive values break tab order
                 c.canvas.focus();
                 // iPhone Safari has no element fullscreen (iPad does).
                 if (c.canvas.requestFullscreen) c.canvas.requestFullscreen();
