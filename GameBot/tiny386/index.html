@@ -88,6 +88,8 @@
                             title="Show or hide the log panel. It keeps recording either way, so nothing is missed while hidden.">Show Log</button>
                     <button id="btn-autoscroll" onclick="toggle_autoscroll()"
                             title="When off, the log stops jumping to the newest line so you can scroll back while the game runs.">Autoscroll: On</button>
+                    <button id="btn-clear-log" onclick="clear_log()"
+                            title="Empty the log panel. Only clears what is on screen -- the servers keep logging, and anything already scrolled past is gone for good.">Clear Log</button>
                     <button onclick="toggle_keyboard()"
                             title="Show or hide the on-screen keyboard. Keys go to the last client window you clicked.">Keyboard</button>
                     <button id="btn-reload-server" onclick="reload_server()"
@@ -187,6 +189,25 @@
             // script is not exposed as a window property.
             window.log_autoscroll = true;
 
+            // Empty the log panel. Deliberately does NOT touch the browser
+            // console -- server output goes to both, so a cleared panel still
+            // leaves the full history in devtools.
+            function clear_log()
+            {
+                const o = document.getElementById('logarea');
+                if (!o) return;
+                const lines = o.value ? o.value.split('\n').length - 1 : 0;
+                o.value = '';
+                o.scrollTop = 0;
+                const btn = document.getElementById('btn-clear-log');
+                if (btn) {
+                    const original = btn.textContent;
+                    btn.textContent = 'Cleared';
+                    setTimeout(function () { btn.textContent = original; }, 900);
+                }
+                console.log('[log] cleared ' + lines + ' line(s) from the panel');
+            }
+
             function toggle_autoscroll()
             {
                 window.log_autoscroll = !window.log_autoscroll;
@@ -277,6 +298,7 @@
                         '<button data-act="grab" title="Lock the mouse to this screen. Press Esc to release.">Grab</button>' +
                         '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
                         '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
+                        '<button data-act="altf4" title="Send Alt+F4 to this PC, closing whatever window has focus in the guest. Sent to the emulated keyboard, so the guest decides what it means -- it will not stop a truly hung app, and on the desktop it asks Windows to shut down.">Alt+F4</button>' +
                         '<button data-act="rmb" title="Send a right-click to this PC.">Right-Click</button>' +
                       '</div>' +
                     '</div>';
@@ -334,6 +356,16 @@
                     if (!c.inst) return;
                     c.inst.send_kbd(1, 0x1d); c.inst.send_kbd(1, 0x38); c.inst.send_kbd(1, 0x53);
                     c.inst.send_kbd(0, 0x53); c.inst.send_kbd(0, 0x38); c.inst.send_kbd(0, 0x1d);
+                });
+                // Alt+F4. Scancodes are the emulator's own (main.js: AltLeft
+                // 0x38, F4 0x3e), pressed and released in nesting order the
+                // way the Ctrl+Alt+Del handler above does it -- releasing Alt
+                // before F4 would look like Alt was let go mid-chord and the
+                // guest would drop the combination.
+                win.querySelector('[data-act="altf4"]').addEventListener('click', () => {
+                    if (!c.inst) return;
+                    c.inst.send_kbd(1, 0x38); c.inst.send_kbd(1, 0x3e);
+                    c.inst.send_kbd(0, 0x3e); c.inst.send_kbd(0, 0x38);
                 });
                 win.querySelector('[data-act="rmb"]').addEventListener('click', () => {
                     if (!c.inst) return;
