@@ -175,12 +175,53 @@
                 }
             }
         </script>
-        <script src="unzstd.js"></script>
-        <script id="gtp-server-script" src="gtp-server.js"></script>
-        <script id="acro-server-script" src="acro-server.js"></script>
-        <script id="ydkj-server-script" src="ydkj-server.js"></script>
-        <script id="cosmic-server-script" src="cosmic-server.js"></script>
-        <script src="main.js"></script>
+        <!-- Loaded with a per-load cache buster rather than as plain
+             static src tags.
+
+             GitHub Pages caches .js and offers no way to set headers, so a
+             deploy that touches index.html AND main.js can be served half-old:
+             the new page against a cached old script. That produced
+             "c.inst.send_text is not a function", which reads like a code bug
+             and is not one. The local webserver.py sends no-cache and never
+             showed it.
+
+             async = false is what makes this safe: dynamically inserted
+             scripts default to async, but with it false they still execute in
+             insertion order. Nothing in this page touches their globals at top
+             level -- get_tiny386 and friends are only reached from click
+             handlers -- so it does not matter that the inline blocks below run
+             first. It is in fact better: the error handlers in those blocks are
+             installed before these scripts run, so a failure in one is
+             reported rather than silent.
+
+             Costs a re-download of ~300 KB per load, which is the right trade
+             for a rig under active development. -->
+        <script>
+            (function () {
+                var v = Date.now();
+                var files = [
+                    ['unzstd.js', null],
+                    ['gtp-server.js', 'gtp-server-script'],
+                    ['acro-server.js', 'acro-server-script'],
+                    ['ydkj-server.js', 'ydkj-server-script'],
+                    ['cosmic-server.js', 'cosmic-server-script'],
+                    ['main.js', null],
+                ];
+                for (var i = 0; i < files.length; i++) {
+                    var el = document.createElement('script');
+                    el.src = files[i][0] + '?v=' + v;
+                    if (files[i][1]) el.id = files[i][1];
+                    el.async = false;   // keep execution order
+                    el.onerror = (function (name) {
+                        return function () {
+                            console.error('[load] failed to load ' + name);
+                            if (window.conlog) window.conlog('FAILED TO LOAD ' + name);
+                        };
+                    })(files[i][0]);
+                    document.head.appendChild(el);
+                }
+            })();
+        </script>
         <script>
             // When off, the log keeps filling but the view stays put, so you
             // can read back through it while the game is still running.
