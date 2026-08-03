@@ -1509,6 +1509,56 @@ return {
     stop,
     set_logger: function (o) { logger = o; },
     send_kbd: function(down, key) { instance.exports.wasm_send_kbd(h2, down, key); },
+
+    /**
+     * Type a string into the guest as if it came from the keyboard.
+     *
+     * The guest speaks scancodes, not characters, so each character is looked
+     * up as a US-layout key plus whether Shift is held. Lives here rather than
+     * in index.html because codemap is inside this closure -- and building a
+     * second scancode table on the page would be one more thing to drift.
+     *
+     * Unmapped characters are skipped and reported, rather than silently
+     * doing nothing: a phone keyboard will happily produce curly quotes and
+     * emoji that no PS/2 keyboard can express.
+     */
+    send_text: function(text) {
+        const SHIFTED = {
+            '!': 'Digit1', '@': 'Digit2', '#': 'Digit3', '$': 'Digit4', '%': 'Digit5',
+            '^': 'Digit6', '&': 'Digit7', '*': 'Digit8', '(': 'Digit9', ')': 'Digit0',
+            '_': 'Minus', '+': 'Equal', '{': 'BracketLeft', '}': 'BracketRight',
+            '|': 'Backslash', ':': 'Semicolon', '"': 'Quote', '<': 'Comma',
+            '>': 'Period', '?': 'Slash', '~': 'Backquote',
+        };
+        const PLAIN = {
+            '-': 'Minus', '=': 'Equal', '[': 'BracketLeft', ']': 'BracketRight',
+            '\\': 'Backslash', ';': 'Semicolon', "'": 'Quote', ',': 'Comma',
+            '.': 'Period', '/': 'Slash', '`': 'Backquote', ' ': 'Space',
+            '\n': 'Enter', '\r': 'Enter', '\t': 'Tab',
+        };
+        const skipped = [];
+        for (const ch of String(text)) {
+            let name = null, shift = false;
+            if (ch >= 'a' && ch <= 'z') name = 'Key' + ch.toUpperCase();
+            else if (ch >= 'A' && ch <= 'Z') { name = 'Key' + ch; shift = true; }
+            else if (ch >= '0' && ch <= '9') name = 'Digit' + ch;
+            else if (SHIFTED[ch]) { name = SHIFTED[ch]; shift = true; }
+            else if (PLAIN[ch]) name = PLAIN[ch];
+
+            const code = name && codemap[name];
+            if (!code) { skipped.push(ch); continue; }
+
+            if (shift) instance.exports.wasm_send_kbd(h2, 1, codemap['ShiftLeft']);
+            instance.exports.wasm_send_kbd(h2, 1, code);
+            instance.exports.wasm_send_kbd(h2, 0, code);
+            if (shift) instance.exports.wasm_send_kbd(h2, 0, codemap['ShiftLeft']);
+        }
+        if (skipped.length) {
+            dolog('send_text: skipped ' + skipped.length
+                  + ' character(s) with no PS/2 key: ' + JSON.stringify(skipped.join('')) + '\n');
+        }
+        return skipped.length === 0;
+    },
     send_mouse: function(x, y, z, btn) {
         instance.exports.wasm_send_mouse(h2, x, y, z, btn);
     },

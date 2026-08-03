@@ -216,6 +216,37 @@
                 conlog('UNHANDLED REJECTION: ' + (r && r.message ? r.message : r));
             });
 
+            // Ctrl+Alt+G toggles pointer lock on the active client.
+            //
+            // Registered on window in the CAPTURE phase so it runs before the
+            // canvas keydown handler in main.js (which is a bubble-phase
+            // listener on the canvas itself). Without that, the chord would be
+            // forwarded to the guest as well as toggling the lock.
+            //
+            // Esc already releases pointer lock -- that is the browser's own
+            // behaviour and cannot be overridden -- so this exists mainly to
+            // re-acquire it without reaching for the mouse.
+            window.addEventListener('keydown', (e) => {
+                if (!e.ctrlKey || !e.altKey || e.code !== 'KeyG') return;
+                e.preventDefault();
+                e.stopPropagation();
+                const c = activeClient;   // same script block, declared below; set by then
+                if (!c || !c.canvas) { conlog('[ui] Ctrl+Alt+G: no active client window.'); return; }
+                if (document.pointerLockElement === c.canvas) {
+                    document.exitPointerLock();
+                } else if (c.canvas.requestPointerLock) {
+                    c.canvas.requestPointerLock();
+                } else {
+                    conlog('[ui] Pointer lock is not supported by this browser.');
+                }
+            }, true);
+
+            document.addEventListener('pointerlockchange', () => {
+                conlog(document.pointerLockElement
+                    ? '[ui] mouse locked to the guest -- Ctrl+Alt+G or Esc to release'
+                    : '[ui] mouse released');
+            });
+
             function clear_log()
             {
                 const o = document.getElementById('logarea');
@@ -319,11 +350,18 @@
                         '</select>' +
                         '<button data-act="start" title="Boot this PC with the selected game.">Start</button>' +
                         '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +
-                        '<button data-act="grab" title="Lock the mouse to this screen. Press Esc to release.">Grab</button>' +
+                        '<button data-act="grab" title="Lock the mouse to this screen, so movement is delivered to the guest instead of moving the host cursor. Ctrl+Alt+G toggles it from the keyboard; Esc releases it. Not available on iOS.">Grab</button>' +
                         '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
                         '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
                         '<button data-act="altf4" title="Send Alt+F4 to this PC, closing whatever window has focus in the guest. Sent to the emulated keyboard, so the guest decides what it means -- it will not stop a truly hung app, and on the desktop it asks Windows to shut down.">Alt+F4</button>' +
+                        '<input type="text" data-act="typebox" placeholder="type here -> Enter sends" spellcheck="false" ' +
+                          'autocomplete="off" autocapitalize="off" autocorrect="off" ' +
+                          'style="font-family: monospace; width: 150px;" ' +
+                          'title="Type with your device keyboard and press Enter to send it to this PC, followed by Return. Use this when the on-screen keyboard is awkward -- on a phone, tapping here raises the native keyboard.">' +
+                        '<button data-act="typesend" title="Send the text in the box to this PC (same as pressing Enter), without a trailing Return.">Send</button>' +
+                        '<button data-act="bksp" title="Send one Backspace to this PC. The type box cannot delete text already sent, so use this to correct the guest.">Backspace</button>' +
                         '<button data-act="lmb" title="Send a left-click to this PC, wherever the guest pointer currently is. Useful on touch devices, where there is no real mouse button.">Left-Click</button>' +
+                        '<button data-act="dblclk" title="Send a left double-click to this PC, wherever the guest pointer currently is. The two clicks go out back to back, well inside the guest\'s double-click interval.">Double-Click</button>' +
                         '<button data-act="rmb" title="Send a right-click to this PC.">Right-Click</button>' +
                       '</div>' +
                     '</div>';
@@ -395,6 +433,32 @@
                     c.inst.send_kbd(1, 0x38); c.inst.send_kbd(1, 0x3e);
                     c.inst.send_kbd(0, 0x3e); c.inst.send_kbd(0, 0x38);
                 });
+                // Type-through box. The guest gets scancodes via inst.send_text
+                // (main.js), which owns the character -> key mapping because the
+                // scancode table lives in its closure.
+                //
+                // Enter sends the line AND a Return, which is what you want when
+                // answering a prompt; the Send button omits the Return so a
+                // field can be filled without submitting it.
+                {
+                    const box = win.querySelector('[data-act="typebox"]');
+                    const push = (withReturn) => {
+                        if (!c.inst) { conlog('[ui] Start this PC before sending text.'); return; }
+                        const text = box.value;
+                        if (!text && !withReturn) return;
+                        c.inst.send_text(withReturn ? text + '\n' : text);
+                        box.value = '';
+                    };
+                    box.addEventListener('keydown', (e) => {
+                        // Keep the box's own typing away from the canvas key
+                        // handler, or every character is delivered twice.
+                        e.stopPropagation();
+                        if (e.key === 'Enter') { e.preventDefault(); push(true); }
+                    });
+                    box.addEventListener('keyup', (e) => e.stopPropagation());
+                    win.querySelector('[data-act="typesend"]').addEventListener('click', () => push(false));
+                }
+
                 // Press-then-release at the pointer's current position -- the
                 // deltas are 0, so this clicks wherever the guest cursor
                 // already is rather than moving it. Button bits are the DOM
@@ -404,6 +468,23 @@
                     if (!c.inst) return;
                     c.inst.send_mouse(0, 0, 0, 1);
                     c.inst.send_mouse(0, 0, 0, 0);
+                });
+                // Backspace. Scancode 0x0e, from the emulator's own codemap
+                // (main.js). Sent as a discrete press/release rather than held,
+                // so it deletes exactly one character with no key repeat.
+                win.querySelector('[data-act="bksp"]').addEventListener('click', () => {
+                    if (!c.inst) return;
+                    c.inst.send_kbd(1, 0x0e);
+                    c.inst.send_kbd(0, 0x0e);
+                });
+
+                // Two press/release pairs with nothing between them. The guest
+                // decides what counts as a double-click by the gap between
+                // presses, and back-to-back is comfortably inside any setting.
+                win.querySelector('[data-act="dblclk"]').addEventListener('click', () => {
+                    if (!c.inst) return;
+                    c.inst.send_mouse(0, 0, 0, 1); c.inst.send_mouse(0, 0, 0, 0);
+                    c.inst.send_mouse(0, 0, 0, 1); c.inst.send_mouse(0, 0, 0, 0);
                 });
                 win.querySelector('[data-act="rmb"]').addEventListener('click', () => {
                     if (!c.inst) return;
