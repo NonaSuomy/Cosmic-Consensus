@@ -42,6 +42,8 @@ function uiClientMarkup(id) {
     '</select>' +
     '<button data-act="start" title="Boot this PC with the selected game.">Start</button>' +
     '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +
+        '<button data-act="save" title="Snapshot this PC: CPU, RAM, devices and disks. Held in memory only -- it does not survive closing the tab.">Save State</button>' +
+        '<button data-act="load" title="Put the last snapshot back. The VM keeps running throughout; it simply finds itself where it was.">Load State</button>' +
     '<button data-act="grab" title="Lock the mouse to this screen, so movement is delivered to the guest instead of moving the host cursor. Ctrl+Alt+G toggles it from the keyboard; Esc releases it. Not available on iOS.">Grab</button>' +
     '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
     '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
@@ -73,6 +75,23 @@ function uiWireControls(c, win, api) {
     win.querySelector('[data-act="start"]').addEventListener('click', c.start);
 
     win.querySelector('[data-act="stop"]').addEventListener('click', () => api.stopClient(c));
+    // One snapshot per client, held in memory. Deliberately not persisted:
+    // see the note on save_state in main.js -- surviving a page reload needs
+    // the handles reconstructed too, which is a separate job.
+    win.querySelector('[data-act="save"]').addEventListener('click', () => {
+        if (!c.inst) { api.conlog('[ui] Start this PC first.'); return; }
+        if (typeof c.inst.save_state !== 'function') {
+            api.conlog('[ui] This page has a stale main.js (no save_state). Hard-refresh.');
+            return;
+        }
+        const snap = c.inst.save_state();
+        if (snap) { c.snapshot = snap; api.conlog('[ui] client ' + c.id + ': state saved'); }
+    });
+    win.querySelector('[data-act="load"]').addEventListener('click', () => {
+        if (!c.inst) { api.conlog('[ui] Start this PC first.'); return; }
+        if (!c.snapshot) { api.conlog('[ui] client ' + c.id + ': no snapshot saved yet'); return; }
+        if (c.inst.load_state(c.snapshot)) api.conlog('[ui] client ' + c.id + ': state restored');
+    });
     win.querySelector('[data-act="grab"]').addEventListener('click', () => {
         c.canvas.tabIndex = 0; c.canvas.focus();   // 0 keeps natural tab order
         // No pointer lock on iOS -- say so rather than throwing.

@@ -1518,6 +1518,69 @@ return {
     send_kbd: function(down, key) { instance.exports.wasm_send_kbd(h2, down, key); },
 
     /**
+     * Snapshot the whole machine.
+     *
+     * State lives in two places, and both are needed:
+     *
+     *   wasm linear memory   CPU registers, guest RAM, every device model
+     *   filestore            the disk images -- the guest writes to these
+     *                        through __read/__write, so they are NOT in wasm
+     *                        memory and a memory-only snapshot would restore a
+     *                        CPU whose idea of the disk had moved on
+     *
+     * Only [0, wasm_heap_used()) is copied. malloc() here is a bump allocator
+     * that never frees, so that bound is exact -- and it matters: the host grows
+     * linear memory to ~640 MB for headroom, so copying the buffer wholesale
+     * would move hundreds of megabytes of zeros per save.
+     *
+     * Returns null rather than a broken snapshot if the wasm is too old to
+     * report its heap use.
+     */
+    save_state: function () {
+        if (!instance.exports.wasm_heap_used) {
+            dolog('save state: this tiny386.wasm has no wasm_heap_used export -- rebuild it\n');
+            return null;
+        }
+        const used = instance.exports.wasm_heap_used();
+        const mem = new Uint8Array(instance.exports.memory.buffer, 0, used).slice();
+        const files = {};
+        let fileBytes = 0;
+        for (const name in filestore) {
+            files[name] = filestore[name].slice();
+            fileBytes += files[name].length;
+        }
+        dolog('state saved: ' + (used / 1048576).toFixed(1) + ' MB memory + '
+              + (fileBytes / 1048576).toFixed(1) + ' MB disk\n');
+        return { mem, files, used, when: Date.now() };
+    },
+
+    /**
+     * Put a snapshot back.
+     *
+     * Restores into the SAME wasm instance on purpose. Every pointer the guest
+     * holds is an offset into linear memory, so rewriting that memory replaces
+     * the machine wholesale -- and because the instance is unchanged, h2, fbptr
+     * and the running step/redraw loops all stay valid. Building a fresh
+     * instance would mean reconstructing those by hand, and the audio context,
+     * the network stack and its DHCP lease with them.
+     */
+    load_state: function (snap) {
+        if (!snap || !snap.mem) { dolog('load state: nothing to restore\n'); return false; }
+        const cap = instance.exports.memory.buffer.byteLength;
+        if (snap.used > cap) {
+            dolog('load state: snapshot needs ' + (snap.used / 1048576).toFixed(1)
+                  + ' MB but this instance only has ' + (cap / 1048576).toFixed(1) + ' MB\n');
+            return false;
+        }
+        // Re-read the view every time: memory.grow() detaches existing ones.
+        new Uint8Array(instance.exports.memory.buffer).set(snap.mem, 0);
+        mem8 = new Uint8Array(instance.exports.memory.buffer);
+        for (const name in snap.files) filestore[name] = snap.files[name].slice();
+        dolog('state restored (' + new Date(snap.when).toLocaleTimeString() + ')\n');
+        return true;
+    },
+
+    /**
      * Type a string into the guest as if it came from the keyboard.
      *
      * The guest speaks scancodes, not characters, so each character is looked
