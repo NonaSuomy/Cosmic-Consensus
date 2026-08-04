@@ -1551,7 +1551,11 @@ return {
         }
         dolog('state saved: ' + (used / 1048576).toFixed(1) + ' MB memory + '
               + (fileBytes / 1048576).toFixed(1) + ' MB disk\n');
-        return { mem, files, used, when: Date.now() };
+        // clockVirtual has to travel with the snapshot. The guest's timer state
+        // -- i8254 count_load_time, the CMOS RTC, every deadline -- is recorded
+        // RELATIVE to this clock, and the clock itself lives out here in the
+        // host, outside the memory being copied.
+        return { mem, files, used, clock: clockVirtual, when: Date.now() };
     },
 
     /**
@@ -1576,6 +1580,30 @@ return {
         new Uint8Array(instance.exports.memory.buffer).set(snap.mem, 0);
         mem8 = new Uint8Array(instance.exports.memory.buffer);
         for (const name in snap.files) filestore[name] = snap.files[name].slice();
+
+        // Rewind the guest's clock to the instant of the snapshot.
+        //
+        // Without this, restoring is indistinguishable from a very long stall:
+        // the guest's saved i8254 count_load_time is minutes in the past while
+        // get_uticks() reports now, so
+        //
+        //     d = (get_uticks() - count_load_time) * PIT_FREQ / 1000000
+        //
+        // comes out enormous and the PIT owes thousands of IRQ0 at once. They
+        // nest faster than the handlers unwind and the kernel stack overflows --
+        // observed as abort with SP c0f01000 / CR2 c0f00ffc at CPL 0, a fault
+        // taken while pushing an interrupt frame. Identical mechanism to the
+        // hidden-tab bug that MAX_CLOCK_STEP_MS guards against; the clamp alone
+        // cannot save it here because the gap is unbounded.
+        //
+        // Rebasing means the guest never sees time move at all: it resumes on
+        // the same tick it was frozen on.
+        if (typeof snap.clock === 'number') {
+            clockVirtual = snap.clock;
+            clockLastReal = Date.now();
+        } else {
+            dolog('load state: snapshot has no clock -- expect a timer storm; re-save it\n');
+        }
         dolog('state restored (' + new Date(snap.when).toLocaleTimeString() + ')\n');
         return true;
     },
