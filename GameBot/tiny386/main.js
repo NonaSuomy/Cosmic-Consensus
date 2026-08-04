@@ -561,6 +561,10 @@ function getAudioWorkletUrl() {
 }
 
 
+// Bumped whenever the snapshot container or its contents change shape, so an
+// old file is refused with a message instead of restoring nonsense.
+const SNAPSHOT_VERSION = 1;
+
 function get_tiny386(screen) {
 
 // Identity for this emulated machine: drives its computer name (patched into
@@ -1556,6 +1560,69 @@ return {
         // RELATIVE to this clock, and the clock itself lives out here in the
         // host, outside the memory being copied.
         return { mem, files, used, clock: clockVirtual, when: Date.now() };
+    },
+
+    /**
+     * Serialise a snapshot to a Blob for download.
+     *
+     * Container, all little-endian:
+     *
+     *     "T386SNAP"          8 bytes magic
+     *     version             u32
+     *     header length       u32
+     *     header              JSON: { used, clock, when, files: [[name, len]] }
+     *     memory              `used` bytes
+     *     file data           each file in header order, back to back
+     *
+     * The header carries lengths rather than offsets so a truncated file is
+     * caught on load instead of silently restoring a half machine.
+     */
+    export_state: function (snap) {
+        if (!snap || !snap.mem) return null;
+        const names = Object.keys(snap.files);
+        const header = JSON.stringify({
+            used: snap.used, clock: snap.clock, when: snap.when,
+            files: names.map((n) => [n, snap.files[n].length]),
+        });
+        const headerBytes = new TextEncoder().encode(header);
+        const magic = new TextEncoder().encode('T386SNAP');
+        const fixed = new Uint8Array(8 + 4 + 4);
+        fixed.set(magic, 0);
+        new DataView(fixed.buffer).setUint32(8, SNAPSHOT_VERSION, true);
+        new DataView(fixed.buffer).setUint32(12, headerBytes.length, true);
+        const parts = [fixed, headerBytes, snap.mem];
+        for (const n of names) parts.push(snap.files[n]);
+        return new Blob(parts, { type: 'application/octet-stream' });
+    },
+
+    /** Parse a file produced by export_state. Returns null and says why if the
+     *  container is not one of ours, is a different version, or is truncated. */
+    import_state: function (buf) {
+        const u8 = new Uint8Array(buf);
+        if (u8.length < 16 || new TextDecoder().decode(u8.subarray(0, 8)) !== 'T386SNAP') {
+            dolog('load file: not a tiny386 snapshot\n');
+            return null;
+        }
+        const dv = new DataView(buf);
+        const version = dv.getUint32(8, true);
+        if (version !== SNAPSHOT_VERSION) {
+            dolog('load file: snapshot version ' + version + ', this build expects '
+                  + SNAPSHOT_VERSION + '\n');
+            return null;
+        }
+        const hlen = dv.getUint32(12, true);
+        let off = 16;
+        const header = JSON.parse(new TextDecoder().decode(u8.subarray(off, off + hlen)));
+        off += hlen;
+        const need = off + header.used + header.files.reduce((a, f) => a + f[1], 0);
+        if (u8.length < need) {
+            dolog('load file: truncated -- need ' + need + ' bytes, file has ' + u8.length + '\n');
+            return null;
+        }
+        const mem = u8.slice(off, off + header.used); off += header.used;
+        const files = {};
+        for (const [name, len] of header.files) { files[name] = u8.slice(off, off + len); off += len; }
+        return { mem, files, used: header.used, clock: header.clock, when: header.when };
     },
 
     /**

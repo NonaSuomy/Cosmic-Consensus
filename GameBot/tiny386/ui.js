@@ -44,6 +44,9 @@ function uiClientMarkup(id) {
     '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +
         '<button data-act="save" title="Snapshot this PC: CPU, RAM, devices and disks. Held in memory only -- it does not survive closing the tab.">Save State</button>' +
         '<button data-act="load" title="Put the last snapshot back. The VM keeps running throughout; it simply finds itself where it was.">Load State</button>' +
+        '<button data-act="savefile" title="Write the snapshot to a file you can keep. Roughly 220 MB -- guest RAM plus both disk images -- so it takes a moment. Survives closing the browser.">Save to File</button>' +
+        '<button data-act="loadfile" title="Load a snapshot file saved earlier. The VM must be started first; the file replaces its state.">Load from File</button>' +
+        '<input type="file" data-act="loadfileinput" accept=".t386,.bin" style="display:none;">' +
     '<button data-act="grab" title="Lock the mouse to this screen, so movement is delivered to the guest instead of moving the host cursor. Ctrl+Alt+G toggles it from the keyboard; Esc releases it. Not available on iOS.">Grab</button>' +
     '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
     '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
@@ -92,6 +95,50 @@ function uiWireControls(c, win, api) {
         if (!c.snapshot) { api.conlog('[ui] client ' + c.id + ': no snapshot saved yet'); return; }
         if (c.inst.load_state(c.snapshot)) api.conlog('[ui] client ' + c.id + ': state restored');
     });
+    // To a file, so a snapshot survives closing the browser. Save State keeps
+    // one in memory for quick undo; this is the durable version.
+    win.querySelector('[data-act="savefile"]').addEventListener('click', () => {
+        if (!c.inst) { api.conlog('[ui] Start this PC first.'); return; }
+        if (typeof c.inst.export_state !== 'function') {
+            api.conlog('[ui] This page has a stale main.js (no export_state). Hard-refresh.');
+            return;
+        }
+        const snap = c.inst.save_state();
+        if (!snap) return;
+        const blob = c.inst.export_state(snap);
+        if (!blob) { api.conlog('[ui] could not serialise the snapshot'); return; }
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tiny386-client' + c.id + '-' + stamp + '.t386';
+        a.click();
+        // Revoking immediately can cancel the download in some browsers; give
+        // it a moment, then release the blob so 220 MB is not pinned forever.
+        setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+        api.conlog('[ui] client ' + c.id + ': writing ' + (blob.size / 1048576).toFixed(0) + ' MB to ' + a.download);
+    });
+
+    const fileInput = win.querySelector('[data-act="loadfileinput"]');
+    win.querySelector('[data-act="loadfile"]').addEventListener('click', () => {
+        if (!c.inst) { api.conlog('[ui] Start this PC first, then load into it.'); return; }
+        fileInput.value = '';   // so picking the same file twice still fires
+        fileInput.click();
+    });
+    fileInput.addEventListener('change', async () => {
+        const f = fileInput.files && fileInput.files[0];
+        if (!f) return;
+        api.conlog('[ui] reading ' + f.name + ' (' + (f.size / 1048576).toFixed(0) + ' MB) ...');
+        try {
+            const snap = c.inst.import_state(await f.arrayBuffer());
+            if (snap && c.inst.load_state(snap)) {
+                c.snapshot = snap;
+                api.conlog('[ui] client ' + c.id + ': state loaded from ' + f.name);
+            }
+        } catch (e) {
+            api.conlog('[ui] could not read ' + f.name + ': ' + (e && e.message ? e.message : e));
+        }
+    });
+
     win.querySelector('[data-act="grab"]').addEventListener('click', () => {
         c.canvas.tabIndex = 0; c.canvas.focus();   // 0 keeps natural tab order
         // No pointer lock on iOS -- say so rather than throwing.
