@@ -1207,11 +1207,15 @@ function unzstdBytes(name, bytes) {
     // the one step that freezes the page, which is precisely when the user most
     // needs to be told what is happening.
     reportImage(name, { phase: 'extract', text: 'Extracting ' + name + ' (' + fmtBytes(bytes.byteLength) + ')' });
-    return getUnzstd().then(unzstd => {
-        const out = unzstd(bytes);
-        dolog('decompressed ' + name + ' -> ' + out.byteLength + ' bytes\n');
-        return out;
-    });
+    return getUnzstd().then(unzstd => new Promise((resolve) => {
+        // unzstd() is synchronous and blocks painting. Give the client status
+        // bar one frame to render its indeterminate progress state first.
+        requestAnimationFrame(() => {
+            const out = unzstd(bytes);
+            dolog('decompressed ' + name + ' -> ' + out.byteLength + ' bytes\n');
+            resolve(out);
+        });
+    }));
 }
 
 function setup_audio(ctx, h) {

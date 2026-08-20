@@ -32,16 +32,6 @@ function uiClientMarkup(id) {
 '</div>' +
 '<div class="window-body">' +
   '<center><canvas width="720" height="480" style="background-color:#000000;"></canvas></center>' +
-  // Boot status. Hidden until the first update arrives and hidden again once
-  // the VM is running, so a window that is not booting looks exactly as it did
-  // before. See uiSetStatus().
-  '<div data-act="statusbar" class="status-bar" style="display:none; margin-top:4px;">' +
-    '<div class="status-bar-field" data-act="statustext" style="flex-grow:2;">Idle</div>' +
-    '<div class="status-bar-field" data-act="statuspct" style="flex-grow:0; min-width:52px; text-align:right;"></div>' +
-  '</div>' +
-  '<div data-act="statusprog" class="progress-indicator segmented" style="display:none; height:18px; margin-top:2px;">' +
-    '<span class="progress-indicator-bar" style="width:0%;"></span>' +
-  '</div>' +
   '<div class="controls-row">' +
     '<select title="Which game disc this PC boots into. Pick before pressing Start.">' +
       '<option value="win95all.ini">beZerk Revived</option>' +
@@ -81,6 +71,16 @@ function uiClientMarkup(id) {
     'R right-click &middot; D double-click &middot; Esc release &middot; ' +
     'drag to move the pointer &middot; double-tap-drag to click-drag &middot; ' +
     'Tab cycles the buttons' +
+  '</div>' +
+  // Boot status is deliberately last, so it reads as the client window's
+  // status bar instead of interrupting the screen and controls. It remains
+  // hidden once the VM reaches the running phase.
+  '<div data-act="statusbar" class="status-bar" style="display:none; margin-top:6px;">' +
+    '<div class="status-bar-field" data-act="statustext" style="flex-grow:2;">Idle</div>' +
+    '<div class="status-bar-field" data-act="statuspct" style="flex-grow:0; min-width:52px; text-align:right;"></div>' +
+  '</div>' +
+  '<div data-act="statusprog" class="progress-indicator segmented" style="display:none; height:18px; margin-top:2px;">' +
+    '<span class="progress-indicator-bar" style="width:0%;"></span>' +
   '</div>' +
 '</div>';
 }

@@ -229,13 +229,15 @@ class AcroRoom {
       }));
   }
 
-  async rosterTo(newcomer) {
+  async rosterTo(newcomer, includeBots = true) {
     newcomer.rosterNames.clear();
     for (const c of this.humans()) {
       if (c !== newcomer) await this.addPlayer(this.gameName(c), c.score, c.username, newcomer);
     }
-    for (const bot of this.botScores.keys()) {
-      await this.addPlayer(bot, this.botScores.get(bot), bot, newcomer);
+    if (includeBots) {
+      for (const bot of this.botScores.keys()) {
+        await this.addPlayer(bot, this.botScores.get(bot), bot, newcomer);
+      }
     }
   }
 }
@@ -262,6 +264,7 @@ class AcroClient {
     this.nick = null;
     this.username = null;
     this.score = 0;
+    this.inGame = false;
     this.rosterNames = new Set();
     this.room = null;
     this.channel = null;
@@ -356,12 +359,21 @@ class AcroClient {
     await this.sendRaw(`:${s} 375 ${n} :- ${s} Message of the Day -`);
     await this.sendRaw(`:${s} 372 ${n} :- Welcome to Acrophobia.`);
     await this.sendRaw(`:${s} 376 ${n} :End of /MOTD command.`);
+    // Acrophobia waits for the client-count numeric and the first keepalive
+    // before it sends MODE/JOIN. The standalone Python server sends both;
+    // omitting them makes the client disconnect immediately after the MOTD,
+    // before it can join Acro_List and receive the room list.
+    await this.sendRaw(`:${s} 255 ${n} :I have 1 clients and 0 servers`);
+    await this.sendRaw(`PING :${s}`);
     acroLog(`STAT: ${n} registered.`);
   }
 
   async handleJoin(channel) {
     const chan = channel || `#${ACRO_LIST_CHANNEL}`;
     const bare = chan.replace(/^#/, '');
+    if (bare !== ACRO_LIST_CHANNEL && this.room && this.room.channel !== bare) {
+      this.leaveRoom();
+    }
     await this.sendRaw(`:${ACRO_BOT_NICK}!${ACRO_BOT_NICK}@${ACRO_SERVER_NAME} JOIN ${chan}`);
     await this.sendRaw(`:${this.nick}!${this.nick}@${ACRO_SERVER_NAME} JOIN ${chan}`);
     await this.sendRaw(`:${ACRO_SERVER_NAME} 353 ${this.nick} = ${chan} :@${ACRO_BOT_NICK} ${this.nick}`);
@@ -375,6 +387,7 @@ class AcroClient {
     if (bare !== ACRO_LIST_CHANNEL) {
       this.room = acroGetRoom(bare);
       this.room.clients.add(this);
+      this.inGame = false;
       this.rosterNames.clear();
     }
     await this.priv('logon_now');
@@ -407,6 +420,7 @@ class AcroClient {
   }
 
   leaveRoom() {
+    this.inGame = false;
     if (!this.room) return;
     const room = this.room;
     room.clients.delete(this);
@@ -504,12 +518,14 @@ class AcroClient {
   async sendRoomList() {
     // start_list bot / list_item bot ... / end_list bot
     await this.priv('start_list bot');
-    for (const item of ACRO_ROOMS) {
+    for (let index = 0; index < ACRO_ROOMS.length; index++) {
+      const item = ACRO_ROOMS[index];
       const room = acroGetRoom(item.channel);
+      const highScore = Math.max(0, ...room.humans().map((c) => c.score || 0));
       await this.priv(
-        `list_item bot 0 ${acroQuote(item.name)} 0 ${acroQuote(ACRO_SERVER_NAME)} ${ACRO_PORT} 0 ` +
+        `list_item bot ${index} ${acroQuote(item.name)} 0 ${acroQuote(ACRO_SERVER_NAME)} ${ACRO_PORT} 0 ` +
         `${acroQuote(item.channel)} 0 ${acroQuote(ACRO_BOT_NICK)} ${item.clean} ${acroQuote(room.mode)} ` +
-        `${room.humans().length} 0 0 0`
+        `${room.humans().length} ${highScore} 0 0`
       );
     }
     await this.priv('end_list bot');
@@ -535,6 +551,22 @@ class AcroClient {
   async startPlay() {
     const room = this.room;
     if (!room) return;
+    if (this.inGame) {
+      await this.priv('current_state start_game');
+      return;
+    }
+    this.inGame = true;
+    // The Win95 client appends player-add rows instead of replacing an old
+    // row when a room is re-entered.  Clear the rows this connection knows
+    // about before sending the current roster, otherwise bots can appear
+    // twice (once at their old score and once at zero/current score).
+    if (this.rosterNames.size) {
+      const oldNames = [...this.rosterNames];
+      for (const name of oldNames) {
+        await this.priv(`player remove ${acroQuote(name)} 0 ${acroQuote(name)}`);
+      }
+      this.rosterNames.clear();
+    }
     const alreadyRunning = room.running || room.starting;
     const humansBeforeJoin = room.humans().length;
     if (!alreadyRunning) {
@@ -552,7 +584,9 @@ class AcroClient {
       for (const bot of room.botScores.keys()) await room.addPlayer(bot, 0, bot);
     }
     await room.addPlayer(this.gameName(), this.score, this.username, null, this);
-    await room.rosterTo(this);
+    // Bot creation already broadcast their initial rows to this player.
+    // Only late joiners need the bot rows replayed during roster sync.
+    await room.rosterTo(this, !botsWereCreated);
     if (!alreadyRunning) {
       room.mode = room.humans().length >= ACRO_MIN_PLAYERS ? 'Play' : 'Practice';
     }
@@ -573,9 +607,16 @@ class AcroClient {
     if (!room) return;
     const kind = (args[1] || '').toLowerCase();
     if (kind === 'answer') {
-      // response answer <time> "<acro>"
+      // Clients may include their transport nick and round number:
+      // response answer <time> <irc-nick> <round> "<acro>"
+      // The nick is not the answer.  Older clients use response answer
+      // <time> "<acro>", so accept both forms.
+      let answerText = args[2] || '';
+      if (/^\d+$/.test(args[2] || '') && args.length >= 4) {
+        answerText = args[args.length - 1] || '';
+      }
       const playerName = room.gameName(this);
-      const answer = { acro: args[3] || '', timeMs: parseInt(args[2], 10) || 0, client: this };
+      const answer = { acro: answerText, timeMs: parseInt(args[2], 10) || 0, client: this };
       if (room.phase === 'faceoff_comp' && room.faceoffPlayers.includes(playerName)) {
         room.faceoffAnswers.set(playerName, answer);
       } else if (room.phase === 'comp' && !room.answers.has(playerName)) {
@@ -583,7 +624,7 @@ class AcroClient {
         room.answerTimes.set(playerName, answer.timeMs);
         if (!room.speedWinner) room.speedWinner = playerName;
       }
-      acroLog(`STAT: ${this.username} submitted "${args[3] || ''}"`);
+      acroLog(`STAT: ${this.username} submitted "${answerText}"`);
       await room.broadcast(`answer_received ${room.answers.size}`);
     } else if (kind === 'vote') {
       // response vote <ircname> <value>
@@ -729,11 +770,16 @@ async function acroRunRoom(room) {
     room.winner = result.winner;
     for (const [name] of entries) {
       const voted = room.votes.get(name)?.target || '';
-      let points = result.counts.get(name) || 0;
-      if (!voted) points = 0;
-      if (name === result.winner) points += room.acronym.length;
-      else if (voted === result.winner) points += 1;
-      if (name === room.speedWinner && voted) points += 2;
+      // A player who never voted earns no points for the round, including
+      // the acronym-length winner bonus. This must stay inside the voted
+      // branch; otherwise an unanswered vote can still score as winner.
+      let points = 0;
+      if (voted) {
+        points = result.counts.get(name) || 0;
+        if (name === result.winner) points += room.acronym.length;
+        else if (voted === result.winner) points += 1;
+        if (name === room.speedWinner) points += 2;
+      }
       const client = room.humans().find((c) => room.gameName(c) === name);
       if (client) client.score += points;
       else room.botScores.set(name, room.botScores.get(name) + points);
@@ -798,7 +844,8 @@ async function acroRunFaceoff(room, alive) {
   await acroSleep(20000);
 
   for (let r = 1; r <= ACRO_FACEOFF_ROUNDS && alive(); r++) {
-    const acronym = randomAcronym();
+    // The original Acrobot uses 3-, 4-, and 5-letter faceoff acronyms.
+    const acronym = randomAcronym(r + 2);
     room.faceoffAnswers.clear();
     room.faceoffVotes.clear();
     room.phase = 'faceoff_comp';
@@ -814,7 +861,10 @@ async function acroRunFaceoff(room, alive) {
         await c.priv('start_rules faceoff_voter 16250');
       }
     }
-    await acroSleep(ACRO_LEAD_MS + ACRO_FACEOFF_COMP_MS);
+    // Acrobot leaves the composition screen up for 38 seconds. The client
+    // ignores the answer list if it arrives after only the advertised
+    // 22.5-second lead+duration window.
+    await acroSleep(38000);
     if (!alive()) return;
     for (const name of room.faceoffPlayers) {
       if (!room.faceoffAnswers.has(name)) {
@@ -890,6 +940,9 @@ async function acroRunFaceoff(room, alive) {
     await recipient.priv('end_list score');
   }
   await room.broadcast(`chat ${acroQuote(`${finalWinner} wins the face-off!`)}`);
+  // Let the final faceoff/results screen remain visible before resetting the
+  // scores and starting the next ordinary game.
+  await acroSleep(28000);
   for (const c of room.humans()) c.score = 0;
   for (const bot of room.botScores.keys()) room.botScores.set(bot, 0);
   await room.broadcast('start_game 8250');

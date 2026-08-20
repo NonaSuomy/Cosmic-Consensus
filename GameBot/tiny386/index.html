@@ -116,8 +116,12 @@
                         <option value="acro">Acrophobia</option>
                         <option value="ydkj">You Don't Know Jack: Net Show</option>
                     </select>
+                </div>
+                <div class="controls-row" id="gtp-tools-row">
+                    <label for="btn-droodle">Get The Picture tools:</label>
                     <button id="btn-droodle" type="button" onclick="open_droodle()"
-                            disabled title="Select Get The Picture to enable the Droodle applet.">Droodle</button>
+                            disabled title="Select Get The Picture to enable the Droodle applet.">Open Droodle Applet</button>
+                    <span id="droodle-hint" style="opacity:.75;">Select Get The Picture to enable it.</span>
                 </div>
                 <details style="margin-top:8px; max-width:760px;">
                     <summary>Multiplayer across browsers (manual WebRTC)</summary>
@@ -711,6 +715,7 @@
             {
                 const sel = document.getElementById('gameselect');
                 const droodle = document.getElementById('btn-droodle');
+                const droodleHint = document.getElementById('droodle-hint');
                 const LABEL = {
                     cosmic: 'Cosmic Consensus',
                     gtp: 'Get The Picture',
@@ -745,6 +750,9 @@
                     droodle.title = enabled
                         ? 'Open the Droodle drawing applet for Get The Picture.'
                         : 'Select Get The Picture to enable the Droodle applet.';
+                    droodleHint.textContent = enabled
+                        ? 'Ready for local drawing and batch conversion.'
+                        : 'Select Get The Picture to enable it.';
                 }
 
                 window.open_droodle = () => {
