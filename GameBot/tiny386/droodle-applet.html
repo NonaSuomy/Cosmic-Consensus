@@ -1,0 +1,1039 @@
+<title>Droodle Applet</title>
+<style>
+/* ── tokens ────────────────────────────────────────────────────────────────
+   Single committed visual world: a 1999 Java applet sitting on a Win98
+   desktop. No dark variant -- the chrome IS the design, and a dark "mode"
+   would be an anachronism. Every colour is painted explicitly so the page
+   holds on either host ground.                                            */
+:root {
+  --desk:      #3a6ea5;   /* Win98 default desktop blue                    */
+  --face:      #c0c0c0;   /* button face                                   */
+  --face-lit:  #dfdfdf;   /* top/left bevel                                */
+  --face-dim:  #808080;   /* bottom/right bevel                            */
+  --face-dark: #000000;   /* outer bevel                                   */
+  --title:     #000080;   /* active title bar                              */
+  --title-2:   #1084d0;
+  --ink:       #000000;
+  --paper:     #ffffff;
+  --frame-navy:#003366;   /* measured from the sample droodles             */
+  --frame-grn: #9bce84;
+  --hint:      #4a4a4a;
+  --ui: "MS Sans Serif", "Microsoft Sans Serif", Tahoma, Verdana, Geneva, sans-serif;
+  --tag: Arial, Helvetica, "Nimbus Sans", sans-serif;  /* nametag, measured */
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: #3a6ea5;
+  background-image:
+    linear-gradient(180deg, #4a7fb5 0%, #2f5d8f 100%);
+  font-family: var(--ui);
+  font-size: 11px;
+  color: var(--ink);
+  padding: 18px 14px 40px;
+  min-height: 100vh;
+}
+
+/* ── window chrome ─────────────────────────────────────────────────────── */
+.win {
+  /* Wide enough for all three columns at once: the 71px tool grid, the 4x
+     drawing surface, and a side column that holds the 275px frame preview
+     without cropping it: 71 + 844 + 300 + gaps/padding = 1259. Below this the
+     page still shrinks -- the drawing surface scrolls inside its own bevel
+     rather than the body scrolling sideways. */
+  max-width: 1264px;
+  margin: 0 auto;
+  background: var(--face);
+  border: 2px outset var(--face);
+  box-shadow: 3px 3px 0 rgba(0,0,0,.35);
+}
+.titlebar {
+  display: flex; align-items: center; gap: 6px;
+  background: linear-gradient(90deg, var(--title), var(--title-2));
+  color: #fff; font-weight: bold; font-size: 12px;
+  padding: 3px 4px 3px 6px; letter-spacing: .01em;
+}
+.titlebar .spacer { flex: 1; }
+.tbtn {
+  width: 18px; height: 16px; background: var(--face);
+  border: 1px outset var(--face); font: bold 10px var(--ui);
+  line-height: 12px; text-align: center; color: #000;
+}
+.menubar {
+  display: flex; gap: 2px; padding: 2px 4px; position: relative;
+  border-bottom: 1px solid var(--face-dim);
+}
+.menubar > .mtop {
+  font: 11px var(--ui); background: none; border: 0; padding: 2px 7px;
+  color: #000; cursor: default;
+}
+.menubar > .mtop[aria-expanded="true"],
+.menubar > .mtop:hover { background: var(--title); color: #fff; }
+.menubar > .mtop:focus-visible { outline: 1px dotted currentColor; outline-offset: -2px; }
+.mtop u { text-decoration: underline; }
+
+.menu {
+  position: absolute; top: 100%; z-index: 40; min-width: 196px;
+  background: var(--face); border: 2px outset var(--face);
+  box-shadow: 2px 2px 0 rgba(0,0,0,.35); padding: 2px;
+}
+.menu[hidden] { display: none; }
+.mitem {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  font: 11px var(--ui); background: none; border: 0; color: #000;
+  padding: 3px 8px 3px 20px; text-align: left; cursor: default; position: relative;
+}
+.mitem:hover:not(:disabled), .mitem:focus { background: var(--title); color: #fff; outline: 0; }
+.mitem:disabled { color: var(--face-dim); text-shadow: 1px 1px 0 var(--face-lit); }
+.mitem .key { margin-left: auto; padding-left: 18px; opacity: .85; }
+.mitem[aria-checked="true"]::before {
+  content: "\2713"; position: absolute; left: 6px; font-size: 11px;
+}
+.msep { height: 0; margin: 3px 2px; border-top: 1px solid var(--face-dim);
+        border-bottom: 1px solid var(--face-lit); }
+
+/* ── modal ─────────────────────────────────────────────────────────────── */
+.modal[hidden] { display: none; }
+.modal {
+  position: fixed; inset: 0; z-index: 90; display: grid; place-items: center;
+  background: rgba(0,0,32,.28);
+}
+.dialog {
+  background: var(--face); border: 2px outset var(--face); min-width: 320px;
+  max-width: 460px; box-shadow: 3px 3px 0 rgba(0,0,0,.4);
+}
+.dialog .titlebar { font-size: 11px; }
+.dialog .inner { padding: 14px; line-height: 1.6; }
+.dialog .inner p { margin: 0 0 9px; }
+.dialog .foot { padding: 0 14px 14px; text-align: right; }
+
+/* ── layout ────────────────────────────────────────────────────────────── */
+.body { display: flex; gap: 10px; padding: 10px; align-items: flex-start; flex-wrap: wrap; }
+.tools { display: grid; grid-template-columns: repeat(2, 34px); gap: 3px; align-content: start; }
+.stage { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 8px; }
+/* 275 frame + 2 canvas border + 18 fieldset padding + 4 fieldset border = 299 */
+.side  { width: 300px; display: flex; flex-direction: column; gap: 10px; }
+
+.tool {
+  width: 34px; height: 32px; background: var(--face);
+  border: 2px outset var(--face); cursor: pointer;
+  display: grid; place-items: center; padding: 0;
+  font: 15px/1 var(--ui); color: #000;
+}
+.tool[aria-pressed="true"] { border-style: inset; background: #b0b0b0; }
+.tool:focus-visible { outline: 2px dotted #000; outline-offset: -5px; }
+.tool svg { display: block; }
+
+fieldset {
+  border: 2px groove var(--face-lit); margin: 0; padding: 7px 9px 9px;
+  background: var(--face);
+}
+legend { padding: 0 4px; font-weight: bold; }
+.row { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+.row:first-of-type { margin-top: 0; }
+.row label { min-width: 44px; }
+input[type=range] { flex: 1; min-width: 0; accent-color: var(--title); }
+input[type=text] {
+  flex: 1; min-width: 0; font: 11px var(--ui); padding: 3px 4px;
+  border: 2px inset var(--face); background: #fff; color: #000;
+}
+.btn {
+  font: 11px var(--ui); padding: 4px 10px; background: var(--face);
+  border: 2px outset var(--face); cursor: pointer; color: #000;
+}
+.btn:active { border-style: inset; }
+.btn:focus-visible { outline: 2px dotted #000; outline-offset: -5px; }
+.btn.wide { width: 100%; }
+.btn.go { font-weight: bold; }
+.chk { display: flex; align-items: center; gap: 6px; }
+
+/* ── drawing surface ───────────────────────────────────────────────────── */
+.paperwrap {
+  border: 2px inset var(--face); background: #fff; padding: 0;
+  display: inline-block; line-height: 0; align-self: flex-start;
+  max-width: 100%; overflow: auto;
+}
+#paper { display: block; cursor: crosshair; touch-action: none; image-rendering: pixelated; }
+.statusbar {
+  display: flex; gap: 6px; align-items: center;
+  border-top: 1px solid var(--face-lit); padding: 4px 6px;
+}
+.statusbar .cell {
+  border: 1px inset var(--face); padding: 2px 7px; min-width: 76px;
+  font-variant-numeric: tabular-nums;
+}
+.statusbar .grow { flex: 1; }
+
+/* ── framed preview ────────────────────────────────────────────────────── */
+.preview { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+.preview canvas {
+  border: 1px solid #000; image-rendering: pixelated;
+  max-width: 100%;   /* shrink only if the viewport truly forces it */
+  height: auto;
+}
+.swatches { display: flex; gap: 4px; }
+.sw {
+  width: 26px; height: 22px; border: 2px outset var(--face); cursor: pointer; padding: 0;
+}
+.sw[aria-pressed="true"] { border-style: inset; }
+.sw i { display: block; width: 100%; height: 100%; }
+
+.note { color: var(--hint); line-height: 1.5; }
+.note b { color: #000; }
+.spec { font-variant-numeric: tabular-nums; }
+.spec dt { font-weight: bold; float: left; clear: left; width: 92px; }
+.spec dd { margin: 0 0 3px 96px; }
+.ok  { color: #006600; font-weight: bold; }
+.bad { color: #a00000; font-weight: bold; }
+
+/* ── the agreement, kept as the original wrote it ──────────────────────── */
+details.legal { margin: 10px; border: 2px groove var(--face-lit); background: var(--face); }
+details.legal summary { padding: 6px 9px; cursor: pointer; font-weight: bold; }
+details.legal .inner { padding: 0 12px 12px; max-width: 62ch; line-height: 1.55; }
+details.legal h4 { margin: 12px 0 4px; font-size: 11px; }
+details.legal p { margin: 0 0 8px; }
+
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+@media (max-width: 760px) { .side { width: 100%; } }
+</style>
+
+<div class="win">
+  <div class="titlebar">
+    <span>&#9998;</span>
+    <span>Droodle Applet &#8212; Get the Picture</span>
+    <span class="spacer"></span>
+    <span class="tbtn">_</span><span class="tbtn">&#9633;</span><span class="tbtn">&#10005;</span>
+  </div>
+  <div class="menubar" id="menubar" role="menubar"></div>
+
+  <div class="modal" id="about" hidden>
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="abouttitle">
+      <div class="titlebar"><span id="abouttitle">About Droodle Applet</span></div>
+      <div class="inner">
+        <p><b>Droodle Applet</b> &#8212; a reconstruction of the drawing tool Berkeley
+        Systems ran alongside <i>Get the Picture</i> in 1999.</p>
+        <p>Droodles are saved as baseline 4:4:4 JPEG, the only flavour the game's
+        decoder accepts. Your browser's own JPEG writer uses 4:2:0 and the game
+        rejects it silently, so this page encodes the file itself.</p>
+        <p>Nothing is uploaded anywhere. Saving writes a file to your machine.</p>
+      </div>
+      <div class="foot"><button class="btn" id="aboutok">OK</button></div>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- tools -->
+    <div class="tools" id="tools" role="toolbar" aria-label="Drawing tools"></div>
+
+    <!-- canvas -->
+    <div class="stage">
+      <div class="paperwrap">
+        <canvas id="paper" width="840" height="624" aria-label="Drawing surface"></canvas>
+      </div>
+      <div class="statusbar">
+        <span class="cell" id="pos">&#8212;</span>
+        <span class="cell" id="toolname">Pencil</span>
+        <span class="grow"></span>
+        <button class="btn" id="undo" title="Ctrl+Z">Undo</button>
+        <button class="btn" id="redo" title="Ctrl+Y">Redo</button>
+        <button class="btn" id="clear">Clear</button>
+      </div>
+    </div>
+
+    <!-- options + output -->
+    <div class="side">
+      <fieldset>
+        <legend>Ink</legend>
+        <div class="row">
+          <div class="swatches" id="inks"></div>
+          <span id="inkname">Black</span>
+        </div>
+        <div class="row">
+          <label for="size">Size</label>
+          <input type="range" id="size" min="1" max="24" value="3">
+          <span class="cell" id="sizeval" style="min-width:26px">3</span>
+        </div>
+        <div class="row" id="densityrow">
+          <label for="density">Spray</label>
+          <input type="range" id="density" min="1" max="100" value="35">
+          <span class="cell" id="densityval" style="min-width:26px">35</span>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Credit</legend>
+        <div class="row">
+          <input type="text" id="artist" maxlength="26" value="Your Name" aria-label="Artist name">
+        </div>
+        <div class="row chk">
+          <input type="checkbox" id="showframe" checked>
+          <label for="showframe" style="min-width:0">Show frame &amp; nametag</label>
+        </div>
+        <div class="row chk">
+          <input type="checkbox" id="quoted">
+          <label for="quoted" style="min-width:0">Quote the name (alias)</label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Preview</legend>
+        <div class="preview">
+          <canvas id="preview" width="275" height="216"></canvas>
+          <button class="btn wide go" id="save">Save Droodle as JPEG</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Game format</legend>
+        <dl class="spec" id="spec"></dl>
+      </fieldset>
+    </div>
+  </div>
+
+  <details class="legal">
+    <summary>Rules &amp; Authorization Agreement</summary>
+    <div class="inner">
+      <p><b>PUT YOUR PICTURE IN THE GAME!</b></p>
+      <p>Draw and Submit a Droodle using the Droodle Applet. Play the game and see if your
+      Droodle is used. You'll know it's yours because we'll put your name in the credit under
+      the Droodle. The more you draw and submit, the greater the chance you have of getting
+      your art and name into the game!!!</p>
+      <h4>Rules</h4>
+      <p>To be placed in the game, a submitted Droodle must not contain images that are deemed
+      by the editorial staff to be profane, sexually suggestive or sexually explicit.</p>
+      <p>A Droodle must be submitted with the artist's real name or player alias and verifiable
+      email address. Any submission by an artist whose player name contains questionable or
+      foul language will not be put in the game.</p>
+      <h4>Authorization Agreement</h4>
+      <p>This agreement becomes effective upon submission of a Droodle to Berkeley Systems, Inc.,
+      and is made by Berkeley Systems, Inc., its parent, subsidiaries and affiliates
+      (collectively "BSI") and the artist submitting the Droodle ("Licensor").</p>
+      <p>"Droodle" means artwork created by the Licensor via the tool called "Droodle Applet"
+      (provided by BSI). "License Material" means any Droodle submitted to BSI by Licensor.</p>
+      <p>All submitted Droodles, used in the game or not, become the property of Berkeley
+      Systems, Inc. The Licensor hereby grants BSI a perpetual, worldwide, fully paid, royalty
+      free license to use, reproduce, distribute, modify, display, publicly perform and make
+      derivative works of the Droodle, as part of and in connection with BSI products.</p>
+      <p>As full and complete consideration for the rights granted to BSI hereunder, BSI will
+      cause an appropriate form of credit to appear for each Droodle in conjunction with each
+      BSI product sold or distributed that contains any submitted Droodle.</p>
+      <p><i>Get the Picture is a trademark of Berkeley Systems, Inc. This is a fan
+      reconstruction of the original applet; it submits nothing anywhere and saves only to your
+      own machine.</i></p>
+    </div>
+  </details>
+</div>
+
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════════════════
+   Geometry, measured off the original droodles rather than guessed.
+
+     full frame     275 x 216
+     art window     210 x 156  at (35, 27)
+     frame navy     #003366    ornament green #9bce84
+
+   The art is strictly 1-bit: every sample is pure black or pure white, which
+   is also what survives JPEG best at this size.
+   ═══════════════════════════════════════════════════════════════════════ */
+const ART_W = 210, ART_H = 156;
+const FR_W = 275, FR_H = 216, ART_X = 35, ART_Y = 27;
+let ZOOM = 4;                         // drawing magnification, set from View
+let showGrid = true;                  // faint 10px guide, toggled from View
+
+/* ── 1-bit art buffer ──────────────────────────────────────────────────── */
+const art = document.createElement("canvas");
+art.width = ART_W; art.height = ART_H;
+const ax = art.getContext("2d", { willReadFrequently: true });
+ax.imageSmoothingEnabled = false;
+function blank() { ax.fillStyle = "#fff"; ax.fillRect(0, 0, ART_W, ART_H); }
+blank();
+
+const paper = document.getElementById("paper");
+paper.width = ART_W * ZOOM; paper.height = ART_H * ZOOM;
+const px = paper.getContext("2d");
+px.imageSmoothingEnabled = false;
+
+const preview = document.getElementById("preview");
+const pv = preview.getContext("2d");
+pv.imageSmoothingEnabled = false;
+
+/* ── history ───────────────────────────────────────────────────────────── */
+const undoStack = [], redoStack = [];
+function snapshot() {
+  undoStack.push(ax.getImageData(0, 0, ART_W, ART_H));
+  if (undoStack.length > 40) undoStack.shift();
+  redoStack.length = 0;
+}
+function restore(from, to) {
+  if (!from.length) return;
+  to.push(ax.getImageData(0, 0, ART_W, ART_H));
+  ax.putImageData(from.pop(), 0, 0);
+  paint();
+}
+
+/* ── tools ─────────────────────────────────────────────────────────────── */
+const I = (d) => '<svg width="18" height="18" viewBox="0 0 18 18" fill="none" ' +
+  'stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' + d + "</svg>";
+const TOOLS = [
+  { id: "pencil", name: "Pencil",    icon: I('<path d="M3 15l2-.5L15 4.5 13.5 3 3.5 13z"/><path d="M12 4.5L13.5 6"/>') },
+  { id: "brush",  name: "Brush",     icon: I('<path d="M4 14c3 0 4-2 4-4"/><circle cx="11" cy="7" r="3.2" fill="#000"/>') },
+  { id: "eraser", name: "Eraser",    icon: I('<path d="M6 14h8"/><path d="M4 11l6-6 4 4-4 4H6z"/>') },
+  { id: "line",   name: "Line",      icon: I('<path d="M3 15L15 3"/>') },
+  { id: "rect",   name: "Rectangle", icon: I('<rect x="3" y="4.5" width="12" height="9"/>') },
+  { id: "frect",  name: "Filled box",icon: I('<rect x="3" y="4.5" width="12" height="9" fill="#000"/>') },
+  { id: "oval",   name: "Ellipse",   icon: I('<ellipse cx="9" cy="9" rx="6" ry="4.5"/>') },
+  { id: "foval",  name: "Filled oval",icon: I('<ellipse cx="9" cy="9" rx="6" ry="4.5" fill="#000"/>') },
+  { id: "spray",  name: "Spray",     icon: I('<circle cx="7" cy="7" r=".8" fill="#000" stroke="none"/><circle cx="11" cy="6" r=".8" fill="#000" stroke="none"/><circle cx="9" cy="10" r=".8" fill="#000" stroke="none"/><circle cx="13" cy="11" r=".8" fill="#000" stroke="none"/><circle cx="5" cy="12" r=".8" fill="#000" stroke="none"/><circle cx="12" cy="14" r=".8" fill="#000" stroke="none"/>') },
+  { id: "fill",   name: "Fill",      icon: I('<path d="M4 9l5-5 5 5-5 5z" fill="#000"/><path d="M15 12c1 1.5 1 3-.5 3s-1.5-1.5-.5-3z" fill="#000"/>') },
+];
+let tool = "pencil", ink = 0, size = 3, density = 35;
+
+const toolbar = document.getElementById("tools");
+TOOLS.forEach((t) => {
+  const b = document.createElement("button");
+  b.className = "tool"; b.type = "button"; b.innerHTML = t.icon;
+  b.title = t.name; b.setAttribute("aria-label", t.name);
+  b.setAttribute("aria-pressed", String(t.id === tool));
+  b.addEventListener("click", () => {
+    tool = t.id;
+    [...toolbar.children].forEach((c, i) => c.setAttribute("aria-pressed", String(TOOLS[i].id === tool)));
+    document.getElementById("toolname").textContent = t.name;
+    document.getElementById("densityrow").style.visibility = t.id === "spray" ? "visible" : "hidden";
+  });
+  toolbar.appendChild(b);
+});
+document.getElementById("densityrow").style.visibility = "hidden";
+
+const inks = document.getElementById("inks");
+[["Black", "#000"], ["White", "#fff"]].forEach(([name, css], i) => {
+  const b = document.createElement("button");
+  b.className = "sw"; b.type = "button"; b.title = name;
+  b.setAttribute("aria-label", name + " ink");
+  b.setAttribute("aria-pressed", String(i === ink));
+  b.innerHTML = '<i style="background:' + css + '"></i>';
+  b.addEventListener("click", () => {
+    ink = i;
+    [...inks.children].forEach((c, j) => c.setAttribute("aria-pressed", String(j === i)));
+    document.getElementById("inkname").textContent = name;
+  });
+  inks.appendChild(b);
+});
+
+const bind = (id, valId, set) => {
+  const el = document.getElementById(id), out = document.getElementById(valId);
+  el.addEventListener("input", () => { set(+el.value); out.textContent = el.value; });
+};
+bind("size", "sizeval", (v) => { size = v; });
+bind("density", "densityval", (v) => { density = v; });
+
+/* ── painting primitives (all on the 1-bit buffer) ─────────────────────── */
+function colour() { return (tool === "eraser") ? "#fff" : (ink ? "#fff" : "#000"); }
+function dot(x, y, r) {
+  ax.fillStyle = colour();
+  if (r <= 1) { ax.fillRect(Math.round(x), Math.round(y), 1, 1); return; }
+  ax.beginPath(); ax.arc(x, y, r / 2, 0, Math.PI * 2); ax.fill();
+}
+function stroke(x0, y0, x1, y1, r) {
+  const d = Math.hypot(x1 - x0, y1 - y0), n = Math.max(1, Math.ceil(d));
+  for (let i = 0; i <= n; i++) dot(x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, r);
+}
+function sprayAt(x, y) {
+  ax.fillStyle = colour();
+  const r = size * 1.6, n = Math.max(1, Math.round(density / 8));
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
+    ax.fillRect(Math.round(x + Math.cos(a) * d), Math.round(y + Math.sin(a) * d), 1, 1);
+  }
+}
+function shape(kind, x0, y0, x1, y1) {
+  ax.fillStyle = ax.strokeStyle = colour();
+  ax.lineWidth = size; ax.lineJoin = ax.lineCap = "round";
+  const x = Math.min(x0, x1), y = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  if (kind === "line") { ax.beginPath(); ax.moveTo(x0, y0); ax.lineTo(x1, y1); ax.stroke(); }
+  else if (kind === "rect") ax.strokeRect(x + .5, y + .5, w, h);
+  else if (kind === "frect") ax.fillRect(x, y, w, h);
+  else {
+    ax.beginPath(); ax.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+    (kind === "foval") ? ax.fill() : ax.stroke();
+  }
+}
+function flood(sx, sy) {
+  const img = ax.getImageData(0, 0, ART_W, ART_H), d = img.data;
+  const at = (x, y) => (y * ART_W + x) * 4;
+  const target = d[at(sx, sy)] > 127 ? 255 : 0;
+  const want = (tool === "eraser" || ink) ? 255 : 0;
+  if (target === want) return;
+  const q = [[sx, sy]];
+  while (q.length) {
+    const [x, y] = q.pop();
+    if (x < 0 || y < 0 || x >= ART_W || y >= ART_H) continue;
+    const i = at(x, y);
+    if ((d[i] > 127 ? 255 : 0) !== target) continue;
+    d[i] = d[i + 1] = d[i + 2] = want; d[i + 3] = 255;
+    q.push([x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]);
+  }
+  ax.putImageData(img, 0, 0);
+}
+
+/* ── pointer handling ──────────────────────────────────────────────────── */
+let drawing = false, sx = 0, sy = 0, lx = 0, ly = 0, before = null;
+const posOf = (e) => {
+  const r = paper.getBoundingClientRect();
+  return [
+    Math.floor((e.clientX - r.left) * (paper.width / r.width) / ZOOM),
+    Math.floor((e.clientY - r.top) * (paper.height / r.height) / ZOOM),
+  ];
+};
+paper.addEventListener("pointerdown", (e) => {
+  paper.setPointerCapture(e.pointerId);
+  const [x, y] = posOf(e);
+  snapshot(); drawing = true; sx = lx = x; sy = ly = y;
+  if (tool === "fill") { flood(x, y); paint(); drawing = false; return; }
+  if (["line", "rect", "frect", "oval", "foval"].includes(tool)) {
+    before = ax.getImageData(0, 0, ART_W, ART_H); return;
+  }
+  if (tool === "spray") sprayAt(x, y); else dot(x, y, size);
+  paint();
+});
+paper.addEventListener("pointermove", (e) => {
+  const [x, y] = posOf(e);
+  document.getElementById("pos").textContent = x + ", " + y;
+  if (!drawing) return;
+  if (before) { ax.putImageData(before, 0, 0); shape(tool, sx, sy, x, y); }
+  else if (tool === "spray") sprayAt(x, y);
+  else stroke(lx, ly, x, y, size);
+  lx = x; ly = y; paint();
+});
+const stop = () => { drawing = false; before = null; };
+paper.addEventListener("pointerup", stop);
+paper.addEventListener("pointercancel", stop);
+paper.addEventListener("pointerleave", () => {
+  document.getElementById("pos").textContent = "—";
+});
+
+document.getElementById("undo").onclick = () => restore(undoStack, redoStack);
+document.getElementById("redo").onclick = () => restore(redoStack, undoStack);
+document.getElementById("clear").onclick = () => { snapshot(); blank(); paint(); };
+addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.key === "z") { e.preventDefault(); restore(undoStack, redoStack); }
+  if (e.key === "y") { e.preventDefault(); restore(redoStack, undoStack); }
+  if (e.key === "s") { e.preventDefault(); saveJPEG(); }
+  if (e.key === "n") { e.preventDefault(); newDroodle(); }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   The frame. Navy ground, doubled green rule with art-nouveau corner curls,
+   and the credit set in a serif to match the originals.
+   ═══════════════════════════════════════════════════════════════════════ */
+function drawFrame(g, withFrame, name) {
+  if (!withFrame) {
+    g.imageSmoothingEnabled = false;
+    g.drawImage(art, 0, 0);
+    return;
+  }
+  const GRN = "#9bce84";
+  g.fillStyle = "#003366"; g.fillRect(0, 0, FR_W, FR_H);
+
+  /* Two parallel rules, measured off the originals: an outer one about 9px in,
+     and an inner one hugging the art window. The ornament lives in the band
+     between them. */
+  g.strokeStyle = GRN; g.lineJoin = "round"; g.lineCap = "round";
+  g.lineWidth = 2.4;
+  g.strokeRect(9, 9, FR_W - 18, FR_H - 18);
+  g.lineWidth = 2;
+  g.strokeRect(ART_X - 3.5, ART_Y - 3.5, ART_W + 7, ART_H + 7);
+
+  /* ── the corner ornament ────────────────────────────────────────────────
+     Each corner of the original carries a DOUBLE scroll -- two spirals of
+     opposite handedness joined by an S -- and carries it twice: once running
+     along the horizontal edge and once down the vertical, mirrored about the
+     45-degree diagonal. Eight scrolls in total, which is what gives the frame
+     its busy art-nouveau look. A single curl per corner (what this drew
+     before) reads as far too plain beside the real thing.                  */
+  const curl = (cx, cy, r0, r1, a0, turns, cw) => {
+    g.beginPath();
+    for (let i = 0; i <= 80; i++) {
+      const t = i / 80;
+      const a = a0 + (cw ? 1 : -1) * t * turns * Math.PI * 2;
+      const r = r0 + (r1 - r0) * t;
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    g.stroke();
+    // the innermost turn is tighter than 2px can render, so it reads as a dot
+    g.beginPath(); g.arc(cx, cy, 1.7, 0, Math.PI * 2); g.fillStyle = GRN; g.fill();
+    return [cx + Math.cos(a0) * r0, cy + Math.sin(a0) * r0];
+  };
+
+  // One scroll, drawn in corner-local coordinates running along +x.
+  const scroll = () => {
+    // Chunky: the originals are bold cartoon linework, not fine engraving.
+    g.lineWidth = 2.8;
+    const s1 = curl(16, 14, 9.5, 2.2, -Math.PI / 2, 1.2, true);
+    const s2 = curl(39, 12, 8.0, 2.2,  Math.PI / 2, 1.2, false);
+    // The tail follows the border rather than cutting the corner diagonally,
+    // which is what made the first attempt read as a bracket instead of a vine.
+    g.beginPath();
+    g.moveTo(0, 3.5);
+    g.quadraticCurveTo(9, 3.5, s1[0], s1[1]);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(s1[0], s1[1]);
+    g.quadraticCurveTo(28, 2, s2[0], s2[1]);
+    g.stroke();
+  };
+
+  // Each corner: the scroll along the edge, then the same shape reflected
+  // across y=x so it runs down the other edge.
+  const corner = (ox, oy, fx, fy) => {
+    for (const swap of [false, true]) {
+      g.save();
+      g.translate(ox, oy); g.scale(fx, fy);
+      if (swap) g.transform(0, 1, 1, 0, 0, 0);
+      scroll();
+      g.restore();
+    }
+  };
+  corner(10, 10, 1, 1);
+  corner(FR_W - 10, 10, -1, 1);
+  corner(10, FR_H - 10, 1, -1);
+  corner(FR_W - 10, FR_H - 10, -1, -1);
+
+  // art window
+  g.imageSmoothingEnabled = false;
+  g.drawImage(art, ART_X, ART_Y);
+  g.strokeStyle = "#001a33"; g.lineWidth = 1;
+  g.strokeRect(ART_X - .5, ART_Y - .5, ART_W + 1, ART_H + 1);
+
+  // credit -- white straight on the navy, no bar, as in the originals
+  const label = (name || "").trim() || "Anonymous";
+  g.fillStyle = "#ffffff";
+  /* Measured off the originals: 13px cap height, 2-3px stems, no serifs on the
+     stems or the i -- a bold grotesque, not the serif this used to set.
+     Rendering "Miki Wiren" at a few sizes against the sample: 17px gives 12px
+     caps / 83px wide, 19px gives 13px / 93px against the original's 13px /
+     91px. 19px it is. */
+  g.font = "bold 19px Arial, Helvetica, 'Liberation Sans', 'Nimbus Sans', sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  let text = label, w = g.measureText(text).width;
+  while (w > FR_W - 60 && text.length > 3) { text = text.slice(0, -1); w = g.measureText(text + "…").width; }
+  if (text !== label) text += "…";
+  g.fillText(text, FR_W / 2, ART_Y + ART_H + 16);
+}
+
+function paint() {
+  px.imageSmoothingEnabled = false;
+  px.clearRect(0, 0, paper.width, paper.height);
+  px.drawImage(art, 0, 0, paper.width, paper.height);
+  if (showGrid && ZOOM >= 3) {
+    // faint 10px guide so pixel work stays legible; pointless below 3x
+    px.strokeStyle = "rgba(0,0,80,.07)"; px.lineWidth = 1;
+    px.beginPath();
+    for (let x = 0; x <= ART_W; x += 10) { px.moveTo(x * ZOOM + .5, 0); px.lineTo(x * ZOOM + .5, paper.height); }
+    for (let y = 0; y <= ART_H; y += 10) { px.moveTo(0, y * ZOOM + .5); px.lineTo(paper.width, y * ZOOM + .5); }
+    px.stroke();
+  }
+  redrawPreview();
+}
+function creditName() {
+  const raw = document.getElementById("artist").value;
+  return document.getElementById("quoted").checked ? '"' + raw.trim() + '"' : raw;
+}
+function redrawPreview() {
+  const withFrame = document.getElementById("showframe").checked;
+  preview.width = withFrame ? FR_W : ART_W;
+  preview.height = withFrame ? FR_H : ART_H;
+  drawFrame(pv, withFrame, creditName());
+  updateSpec();
+}
+["artist", "showframe", "quoted"].forEach((id) =>
+  document.getElementById(id).addEventListener("input", redrawPreview));
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Baseline 4:4:4 JPEG encoder.
+
+   canvas.toBlob("image/jpeg") writes 4:2:0 chroma, which GetThePicture.exe
+   refuses outright -- "SOF0 - Color Image needs 1x1 color sampling" -- and it
+   refuses it SILENTLY, leaving the game on its still-downloading placeholder
+   with no error anywhere. So the file is assembled here instead, to the exact
+   subset the client's decoder (NCI JPoster) accepts:
+
+     SOF0 baseline * one scan * 8-bit precision * 3 components * all 1x1
+   ═══════════════════════════════════════════════════════════════════════ */
+const ZIG = [0,1,8,16,9,2,3,10,17,24,32,25,18,11,4,5,12,19,26,33,40,48,41,34,27,20,13,6,7,14,21,28,
+35,42,49,56,57,50,43,36,29,22,15,23,30,37,44,51,58,59,52,45,38,31,39,46,53,60,61,54,47,55,62,63];
+const QY = [16,11,10,16,24,40,51,61,12,12,14,19,26,58,60,55,14,13,16,24,40,57,69,56,14,17,22,29,51,87,80,62,
+18,22,37,56,68,109,103,77,24,35,55,64,81,104,113,92,49,64,78,87,103,121,120,101,72,92,95,98,112,100,103,99];
+const QC = [17,18,24,47,99,99,99,99,18,21,26,66,99,99,99,99,24,26,56,99,99,99,99,99,47,66,99,99,99,99,99,99,
+99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99];
+const BITS_DC_Y=[0,0,1,5,1,1,1,1,1,1,0,0,0,0,0,0,0], VAL_DC_Y=[0,1,2,3,4,5,6,7,8,9,10,11];
+const BITS_DC_C=[0,0,3,1,1,1,1,1,1,1,1,1,0,0,0,0,0], VAL_DC_C=[0,1,2,3,4,5,6,7,8,9,10,11];
+const BITS_AC_Y=[0,0,2,1,3,3,2,4,3,5,5,4,4,0,0,1,0x7d];
+const VAL_AC_Y=[1,2,3,0,4,17,5,18,33,49,65,6,19,81,97,7,34,113,20,50,129,145,161,8,35,66,177,193,21,82,209,240,
+36,51,98,114,130,9,10,22,23,24,25,26,37,38,39,40,41,42,52,53,54,55,56,57,58,67,68,69,70,71,72,73,74,83,84,85,
+86,87,88,89,90,99,100,101,102,103,104,105,106,115,116,117,118,119,120,121,122,131,132,133,134,135,136,137,138,
+146,147,148,149,150,151,152,153,154,162,163,164,165,166,167,168,169,170,178,179,180,181,182,183,184,185,186,
+194,195,196,197,198,199,200,201,202,210,211,212,213,214,215,216,217,218,225,226,227,228,229,230,231,232,233,
+234,241,242,243,244,245,246,247,248,249,250];
+const BITS_AC_C=[0,0,2,1,2,4,4,3,4,7,5,4,4,0,1,2,0x77];
+const VAL_AC_C=[0,1,2,3,17,4,5,33,49,6,18,65,81,7,97,113,19,34,50,129,8,20,66,145,161,177,193,9,35,51,82,240,
+21,98,114,209,10,22,36,52,225,37,241,23,24,25,26,38,39,40,41,42,53,54,55,56,57,58,67,68,69,70,71,72,73,74,83,
+84,85,86,87,88,89,90,99,100,101,102,103,104,105,106,115,116,117,118,119,120,121,122,130,131,132,133,134,135,
+136,137,138,146,147,148,149,150,151,152,153,154,162,163,164,165,166,167,168,169,170,178,179,180,181,182,183,
+184,185,186,194,195,196,197,198,199,200,201,202,210,211,212,213,214,215,216,217,218,226,227,228,229,230,231,
+232,233,234,242,243,244,245,246,247,248,249,250];
+
+function huffTable(bits, vals) {
+  const t = []; let code = 0, k = 0;
+  for (let l = 1; l <= 16; l++) {
+    for (let i = 0; i < bits[l]; i++) { t[vals[k++]] = [code, l]; code++; }
+    code <<= 1;
+  }
+  return t;
+}
+function scaleQ(q, quality) {
+  const s = quality < 50 ? 5000 / quality : 200 - quality * 2;
+  return q.map((v) => Math.min(255, Math.max(1, Math.round((v * s + 50) / 100))));
+}
+
+function encodeJPEG(canvas, quality) {
+  const W = canvas.width, H = canvas.height;
+  const src = canvas.getContext("2d").getImageData(0, 0, W, H).data;
+  const qy = scaleQ(QY, quality), qc = scaleQ(QC, quality);
+  const hDCy = huffTable(BITS_DC_Y, VAL_DC_Y), hACy = huffTable(BITS_AC_Y, VAL_AC_Y);
+  const hDCc = huffTable(BITS_DC_C, VAL_DC_C), hACc = huffTable(BITS_AC_C, VAL_AC_C);
+
+  const out = [];
+  let acc = 0, nbits = 0;
+  const byte = (b) => out.push(b & 255);
+  const word = (w) => { byte(w >> 8); byte(w); };
+  const putBits = (code, len) => {
+    acc = (acc << len) | (code & ((1 << len) - 1)); nbits += len;
+    while (nbits >= 8) {
+      nbits -= 8; const b = (acc >> nbits) & 255; byte(b);
+      if (b === 0xFF) byte(0);                      // byte stuffing
+    }
+  };
+  const flush = () => { if (nbits) putBits((1 << (8 - nbits)) - 1, 8 - nbits); };
+
+  // ── headers ──
+  word(0xFFD8);
+  word(0xFFE0); word(16); "JFIF".split("").forEach((c) => byte(c.charCodeAt(0)));
+  byte(0); byte(1); byte(1); byte(0); word(1); word(1); byte(0); byte(0);
+  word(0xFFDB); word(132);
+  byte(0); ZIG.forEach((z) => byte(qy[z]));         // 8-bit precision tables
+  byte(1); ZIG.forEach((z) => byte(qc[z]));
+  word(0xFFC0); word(17); byte(8); word(H); word(W); byte(3);
+  // every component 1x1 -- 4:4:4, the only sampling the client accepts
+  byte(1); byte(0x11); byte(0);
+  byte(2); byte(0x11); byte(1);
+  byte(3); byte(0x11); byte(1);
+  const dht = (cls, id, bits, vals) => {
+    word(0xFFC4); word(3 + 16 + vals.length); byte((cls << 4) | id);
+    for (let i = 1; i <= 16; i++) byte(bits[i]);
+    vals.forEach(byte);
+  };
+  dht(0, 0, BITS_DC_Y, VAL_DC_Y); dht(1, 0, BITS_AC_Y, VAL_AC_Y);
+  dht(0, 1, BITS_DC_C, VAL_DC_C); dht(1, 1, BITS_AC_C, VAL_AC_C);
+  word(0xFFDA); word(12); byte(3);
+  byte(1); byte(0x00); byte(2); byte(0x11); byte(3); byte(0x11);
+  byte(0); byte(63); byte(0);
+
+  // ── forward DCT (separable, float) ──
+  const C = new Float32Array(8);
+  for (let i = 0; i < 8; i++) C[i] = i ? Math.cos(i * Math.PI / 16) : 0;
+  const COS = new Float32Array(64);
+  for (let u = 0; u < 8; u++) for (let x = 0; x < 8; x++)
+    COS[u * 8 + x] = Math.cos((2 * x + 1) * u * Math.PI / 16) * (u ? .5 : Math.SQRT1_2 * .5);
+  const tmp = new Float32Array(64), blk = new Float32Array(64);
+  const fdct = (b) => {
+    for (let y = 0; y < 8; y++) for (let u = 0; u < 8; u++) {
+      let s = 0; for (let x = 0; x < 8; x++) s += b[y * 8 + x] * COS[u * 8 + x];
+      tmp[y * 8 + u] = s;
+    }
+    for (let u = 0; u < 8; u++) for (let v = 0; v < 8; v++) {
+      let s = 0; for (let y = 0; y < 8; y++) s += tmp[y * 8 + u] * COS[v * 8 + y];
+      b[v * 8 + u] = s;
+    }
+  };
+
+  const cat = (v) => { let a = Math.abs(v), n = 0; while (a) { a >>= 1; n++; } return n; };
+  const block = (data, q, hDC, hAC, prevDC) => {
+    fdct(data);
+    const q2 = new Int16Array(64);
+    for (let i = 0; i < 64; i++) q2[i] = Math.round(data[ZIG[i]] / q[ZIG[i]]);
+    const diff = q2[0] - prevDC;
+    if (!diff) putBits(hDC[0][0], hDC[0][1]);
+    else {
+      const n = cat(diff); putBits(hDC[n][0], hDC[n][1]);
+      putBits(diff > 0 ? diff : diff - 1 + (1 << n), n);
+    }
+    let end = 63; while (end > 0 && q2[end] === 0) end--;
+    for (let i = 1; i <= end; i++) {
+      let run = 0;
+      while (q2[i] === 0 && i <= end) { run++; i++; }
+      while (run > 15) { putBits(hAC[0xF0][0], hAC[0xF0][1]); run -= 16; }
+      const n = cat(q2[i]), sym = (run << 4) | n;
+      putBits(hAC[sym][0], hAC[sym][1]);
+      putBits(q2[i] > 0 ? q2[i] : q2[i] - 1 + (1 << n), n);
+    }
+    if (end < 63) putBits(hAC[0][0], hAC[0][1]);
+    return q2[0];
+  };
+
+  const Y = new Float32Array(64), Cb = new Float32Array(64), Cr = new Float32Array(64);
+  let dcY = 0, dcB = 0, dcR = 0;
+  for (let by = 0; by < H; by += 8) {
+    for (let bx = 0; bx < W; bx += 8) {
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const sxp = Math.min(W - 1, bx + x), syp = Math.min(H - 1, by + y);
+        const i = (syp * W + sxp) * 4, r = src[i], g = src[i + 1], b = src[i + 2];
+        const k = y * 8 + x;
+        Y[k]  =  0.299 * r + 0.587 * g + 0.114 * b - 128;
+        Cb[k] = -0.168736 * r - 0.331264 * g + 0.5 * b;
+        Cr[k] =  0.5 * r - 0.418688 * g - 0.081312 * b;
+      }
+      dcY = block(Y, qy, hDCy, hACy, dcY);
+      dcB = block(Cb, qc, hDCc, hACc, dcB);
+      dcR = block(Cr, qc, hDCc, hACc, dcR);
+    }
+  }
+  flush();
+  word(0xFFD9);
+  return new Uint8Array(out);
+}
+
+/* ── spec panel: state the exact rules, and the real byte count ────────── */
+let lastBytes = 0;
+function updateSpec() {
+  const w = preview.width, h = preview.height;
+  document.getElementById("spec").innerHTML =
+    "<dt>Size</dt><dd>" + w + " × " + h + " px</dd>" +
+    "<dt>Encoding</dt><dd>baseline, 1 scan</dd>" +
+    "<dt>Colour</dt><dd>3 components, 4:4:4</dd>" +
+    "<dt>Precision</dt><dd>8-bit</dd>" +
+    "<dt>Decoder</dt><dd><span class='ok'>accepted</span></dd>" +
+    (lastBytes ? "<dt>Last save</dt><dd>" + lastBytes.toLocaleString() + " bytes</dd>" : "");
+}
+
+document.getElementById("save").onclick = () => saveJPEG();
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Menus.
+
+   Period-correct behaviour, which is more than "a div appears": click to open,
+   hover to slide between menus once one is open, click-away and Escape to
+   close, arrow keys to walk the items, Alt+letter for the underlined mnemonic.
+   Toggles carry a checkmark and report aria-checked so they are not just a
+   visual tick.
+   ═══════════════════════════════════════════════════════════════════════ */
+const SEP = { sep: true };
+const MENUS = [
+  ["File", "F", () => [
+    { label: "New",                    key: "Ctrl+N", run: newDroodle },
+    { label: "Open picture…",          run: openPicture },
+    SEP,
+    { label: "Save Droodle as JPEG",   key: "Ctrl+S", run: () => saveJPEG() },
+    { label: "Save artwork as PNG",    run: () => savePNG(false) },
+    { label: "Save framed PNG",        run: () => savePNG(true) },
+  ]],
+  ["Edit", "E", () => [
+    { label: "Undo", key: "Ctrl+Z", run: () => restore(undoStack, redoStack), off: !undoStack.length },
+    { label: "Redo", key: "Ctrl+Y", run: () => restore(redoStack, undoStack), off: !redoStack.length },
+    SEP,
+    { label: "Invert black and white", run: invert },
+    { label: "Clear artwork",          run: () => { snapshot(); blank(); paint(); } },
+  ]],
+  ["View", "V", () => [
+    { label: "Zoom 2x", run: () => setZoom(2), checked: ZOOM === 2 },
+    { label: "Zoom 3x", run: () => setZoom(3), checked: ZOOM === 3 },
+    { label: "Zoom 4x", run: () => setZoom(4), checked: ZOOM === 4 },
+    { label: "Zoom 6x", run: () => setZoom(6), checked: ZOOM === 6 },
+    SEP,
+    { label: "Guide grid",     run: () => { showGrid = !showGrid; paint(); }, checked: showGrid },
+    { label: "Frame and name", run: () => { const c = document.getElementById("showframe");
+                                            c.checked = !c.checked; redrawPreview(); },
+      checked: document.getElementById("showframe").checked },
+  ]],
+  ["Help", "H", () => [
+    { label: "Rules and Agreement", run: () => {
+        const d = document.querySelector("details.legal");
+        d.open = true; d.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      } },
+    SEP,
+    { label: "About Droodle Applet", run: () => showModal(true) },
+  ]],
+];
+
+const menubar = document.getElementById("menubar");
+let openMenu = null;
+
+function closeMenu() {
+  if (!openMenu) return;
+  openMenu.btn.setAttribute("aria-expanded", "false");
+  openMenu.el.remove();
+  openMenu = null;
+}
+function buildMenu(btn, items) {
+  const el = document.createElement("div");
+  el.className = "menu"; el.setAttribute("role", "menu");
+  el.style.left = btn.offsetLeft + "px";
+  items.forEach((it) => {
+    if (it.sep) { const h = document.createElement("div"); h.className = "msep"; el.appendChild(h); return; }
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "mitem";
+    b.setAttribute("role", it.checked === undefined ? "menuitem" : "menuitemcheckbox");
+    if (it.checked !== undefined) b.setAttribute("aria-checked", String(it.checked));
+    b.disabled = !!it.off;
+    b.innerHTML = '<span>' + it.label + '</span>' +
+                  (it.key ? '<span class="key">' + it.key + "</span>" : "");
+    b.addEventListener("click", () => { closeMenu(); it.run(); });
+    el.appendChild(b);
+  });
+  return el;
+}
+function openAt(i) {
+  const [label, , build] = MENUS[i];
+  const btn = menubar.children[i];
+  closeMenu();
+  const el = buildMenu(btn, build());
+  menubar.appendChild(el);
+  btn.setAttribute("aria-expanded", "true");
+  openMenu = { i, btn, el };
+  const first = el.querySelector(".mitem:not(:disabled)");
+  if (first) first.focus();
+}
+MENUS.forEach(([label, mn], i) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "mtop";
+  b.setAttribute("role", "menuitem"); b.setAttribute("aria-haspopup", "true");
+  b.setAttribute("aria-expanded", "false");
+  b.innerHTML = "<u>" + label[0] + "</u>" + label.slice(1);
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    (openMenu && openMenu.i === i) ? closeMenu() : openAt(i);
+  });
+  b.addEventListener("mouseenter", () => { if (openMenu && openMenu.i !== i) openAt(i); });
+  menubar.appendChild(b);
+});
+document.addEventListener("click", (e) => { if (openMenu && !openMenu.el.contains(e.target)) closeMenu(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && openMenu) { const b = openMenu.btn; closeMenu(); b.focus(); return; }
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    const i = MENUS.findIndex(([, mn]) => mn.toLowerCase() === e.key.toLowerCase());
+    if (i >= 0) { e.preventDefault(); openAt(i); return; }
+  }
+  if (!openMenu) return;
+  const items = [...openMenu.el.querySelectorAll(".mitem:not(:disabled)")];
+  const at = items.indexOf(document.activeElement);
+  if (e.key === "ArrowDown") { e.preventDefault(); items[(at + 1) % items.length].focus(); }
+  if (e.key === "ArrowUp")   { e.preventDefault(); items[(at - 1 + items.length) % items.length].focus(); }
+  if (e.key === "ArrowRight"){ e.preventDefault(); openAt((openMenu.i + 1) % MENUS.length); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); openAt((openMenu.i - 1 + MENUS.length) % MENUS.length); }
+});
+
+/* ── the actions themselves ────────────────────────────────────────────── */
+function setZoom(z) {
+  ZOOM = z;
+  paper.width = ART_W * z; paper.height = ART_H * z;
+  px.imageSmoothingEnabled = false;
+  paint();
+}
+function invert() {
+  snapshot();
+  const img = ax.getImageData(0, 0, ART_W, ART_H), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const v = d[i] > 127 ? 0 : 255;
+    d[i] = d[i + 1] = d[i + 2] = v;
+  }
+  ax.putImageData(img, 0, 0); paint();
+}
+function newDroodle() {
+  if (!confirm("Start a new Droodle? The current artwork will be cleared.")) return;
+  snapshot(); blank(); paint();
+}
+function showModal(on) {
+  document.getElementById("about").hidden = !on;
+  if (on) document.getElementById("aboutok").focus();
+}
+document.getElementById("aboutok").onclick = () => showModal(false);
+document.getElementById("about").addEventListener("click", (e) => {
+  if (e.target.id === "about") showModal(false);
+});
+
+/* Open an existing picture: fit it into the art window and hard-threshold to
+   1-bit, because that is what the rest of the tool -- and the game's own
+   droodles -- are. Anything else would look wrong the moment it was drawn on. */
+function openPicture() {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = "image/*";
+  inp.addEventListener("change", () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    const img = new Image();
+    img.onload = () => {
+      snapshot();
+      blank();
+      const s = Math.min(ART_W / img.width, ART_H / img.height);
+      const w = Math.round(img.width * s), h = Math.round(img.height * s);
+      ax.imageSmoothingEnabled = true;
+      ax.drawImage(img, (ART_W - w) >> 1, (ART_H - h) >> 1, w, h);
+      ax.imageSmoothingEnabled = false;
+      const d = ax.getImageData(0, 0, ART_W, ART_H), p = d.data;
+      for (let i = 0; i < p.length; i += 4) {
+        const lum = 0.299 * p[i] + 0.587 * p[i + 1] + 0.114 * p[i + 2];
+        const v = lum > 128 ? 255 : 0;
+        p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 255;
+      }
+      ax.putImageData(d, 0, 0);
+      paint();
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => alert("That file could not be read as a picture.");
+    img.src = URL.createObjectURL(f);
+  });
+  inp.click();
+}
+
+function fileStem() {
+  const raw = (creditName() || "").trim() || "untitled";
+  return raw.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "") || "untitled";
+}
+function download(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function saveJPEG() {
+  const bytes = encodeJPEG(preview, 88);
+  lastBytes = bytes.length; updateSpec();
+  download(new Blob([bytes], { type: "image/jpeg" }), "Droodle_" + fileStem() + ".jpg");
+}
+function savePNG(framed) {
+  // PNG is for keeping and re-editing, not for the game -- the client predates
+  // it entirely and will not open one.
+  const c = document.createElement("canvas");
+  c.width = framed ? FR_W : ART_W; c.height = framed ? FR_H : ART_H;
+  drawFrame(c.getContext("2d"), framed, creditName());
+  c.toBlob((b) => download(b, "Droodle_" + fileStem() + (framed ? "_framed" : "") + ".png"), "image/png");
+}
+
+/* ── a starting droodle, so the surface is never a blank stare ─────────── */
+(function seed() {
+  ax.fillStyle = "#000";
+  ax.beginPath(); ax.arc(150, 60, 26, 0, Math.PI * 2); ax.fill();
+  ax.fillStyle = "#fff";
+  ax.beginPath(); ax.arc(140, 52, 24, 0, Math.PI * 2); ax.fill();
+  ax.fillStyle = "#000";
+  for (let i = 0; i < 90; i++) {
+    const a = Math.random() * Math.PI * 2, d = 34 + Math.random() * 46;
+    const r = 1 + Math.random() * 3.4;
+    ax.beginPath(); ax.arc(150 + Math.cos(a) * d, 66 + Math.sin(a) * d * .8, r, 0, Math.PI * 2); ax.fill();
+  }
+  undoStack.length = 0;
+  paint();
+})();
+</script>
