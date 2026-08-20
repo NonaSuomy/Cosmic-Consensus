@@ -1,9 +1,9 @@
 'use strict';
 
-// ── hot reload for cosmic-server.js ───────────────────────────────────────
+// ── hot reload for the shared HTTP/game servers ───────────────────────────
 //
-// Re-fetches cosmic-server.js (cache-busted) and injects it as a fresh
-// inline <script>, so its top-level IIFE runs again and reassigns
+// Re-fetches the shared HTTP layer and the game scripts (cache-busted) and
+// injects them as fresh inline <script>s, so their IIFEs run again and reassign
 // window.cosmicHttpHandler / window.startCosmicGameServer /
 // window.handleGameConnection to the new definitions.
 //
@@ -35,6 +35,18 @@
 let netStackPromise = null;   // resolves once the stack + services exist
 const vmPorts = [];           // one entry per live VM: { id, inject(buf) }
 let tapWriteController = null; // enqueue here to put a frame on the wire
+// VM ids restart at 1 in every browser tab.  The page-level namespace keeps a
+// host VM and a guest VM from presenting the same Ethernet MAC across the
+// WebRTC bridge, which otherwise makes DHCP/ARP appear intermittently broken.
+const NET_NODE_ID = (() => {
+    try {
+        const b = new Uint8Array(2);
+        crypto.getRandomValues(b);
+        return (b[0] << 8) | b[1] || 1;
+    } catch (e) {
+        return (Math.random() * 65535) | 1;
+    }
+})();
 
 // ── per-VM MAC translation ───────────────────────────────────────────────
 //
@@ -61,7 +73,10 @@ function macSame(b, off, mac) {
     return true;
 }
 // Locally-administered unicast address (0x02 bit set), unique per VM id.
-function virtualMacFor(id) { return [0x02, 0x54, 0x00, 0x00, (id >> 8) & 0xff, id & 0xff]; }
+function virtualMacFor(id) {
+    return [0x02, 0x54, (NET_NODE_ID >> 8) & 0xff, NET_NODE_ID & 0xff,
+        (id >> 8) & 0xff, id & 0xff];
+}
 
 // Offset of the BOOTP chaddr field, or -1 if this is not a DHCP frame.
 function dhcpChaddrOffset(b) {
@@ -214,6 +229,13 @@ let drainScheduled = false;
 
 function hubBroadcast(buf, fromId) {
     pendingFrames.push({ buf, fromId });
+    // A guest's VM frames travel across the reliable WebRTC data channel to
+    // the host's virtual Ethernet segment. Local-only and host pages keep
+    // their existing path through tcpip.js.
+    if (window.p2pBridge && window.p2pBridge.role === 'guest') {
+        try { window.p2pBridge.sendFrame(buf); }
+        catch (e) { console.error('[p2p] guest frame send failed:', e); }
+    }
     if (!drainScheduled) {
         drainScheduled = true;
         setTimeout(drainHub, 0);
@@ -274,7 +296,29 @@ function ensureNetwork() {
     netStackPromise = (async () => {
         const tcpip = await import('tcpip');
         const stack = await tcpip.createStack();
-        const tap = await stack.interfaces.createTap({ ip: '10.0.2.2/24' });
+        const p2pRole = window.p2pBridge ? window.p2pBridge.role : 'local';
+        // Only the host owns the virtual server address.  If a guest also
+        // claims 10.0.2.2, its otherwise-empty local stack can answer ARP or
+        // reset TCP connections intended for the host before those frames
+        // complete the WebRTC trip.  The guest tap still needs an address,
+        // but .254 is deliberately outside the server's identity.
+        const tapIp = p2pRole === 'guest' ? '10.0.2.254/24' : '10.0.2.2/24';
+        const tap = await stack.interfaces.createTap({ ip: tapIp });
+
+        if (window.p2pBridge) {
+            window.p2pBridge.setFrameCallback((buf) => {
+                // A host feeds guest frames into its real tcpip.js services;
+                // a guest delivers host responses directly to its VM NICs.
+                if (window.p2pBridge.role === 'host') {
+                    if (tapWriteController) {
+                        try { tapWriteController.enqueue(buf); } catch (e) { /* stack closed */ }
+                    }
+                    for (const p of vmPorts) deliver(p, buf);
+                } else if (window.p2pBridge.role === 'guest') {
+                    for (const p of vmPorts) deliver(p, buf);
+                }
+            });
+        }
 
         // One writable side shared by every VM.
         const toTap = new ReadableStream({
@@ -286,20 +330,28 @@ function ensureNetwork() {
         // deliver() swallows per-VM errors so this pipe can never error out --
         // if it did, every VM would lose networking at once.
         tap.readable.pipeTo(new WritableStream({
-            write: (buf) => { for (const p of vmPorts) deliver(p, buf); }
+            write: (buf) => {
+                for (const p of vmPorts) deliver(p, buf);
+                if (window.p2pBridge && window.p2pBridge.role === 'host') {
+                    try { window.p2pBridge.sendFrame(buf); }
+                    catch (e) { console.error('[p2p] host frame send failed:', e); }
+                }
+            }
         })).catch(e => console.error('[net] tap read pipe ended:', e));
 
-        const dhcpMod = await import('@tcpip/dhcp');
-        const dhcp = await dhcpMod.createDhcp(stack.udp);
-        dhcp.serve({
-            // Widened from .15-.31 (17 addresses): with many client windows on
-            // one segment the old range ran out and later VMs got no lease.
-            leaseRange: { start: '10.0.2.15', end: '10.0.2.200' },
-            serverIdentifier: '10.0.2.2',
-            netmask: '255.255.255.0',
-            router: '10.0.2.2',
-            dnsServers: ['10.0.2.2'],
-        });
+        if (p2pRole !== 'guest') {
+            const dhcpMod = await import('@tcpip/dhcp');
+            const dhcp = await dhcpMod.createDhcp(stack.udp);
+            dhcp.serve({
+                // Widened from .15-.31 (17 addresses): with many client windows on
+                // one segment the old range ran out and later VMs got no lease.
+                leaseRange: { start: '10.0.2.15', end: '10.0.2.200' },
+                serverIdentifier: '10.0.2.2',
+                netmask: '255.255.255.0',
+                router: '10.0.2.2',
+                dnsServers: ['10.0.2.2'],
+            });
+        }
 
         // DNS on 10.0.2.2:53. DHCP has always advertised this address as the
         // resolver but nothing listened on it, so every hostname lookup from
@@ -308,23 +360,26 @@ function ensureNetwork() {
         try {
             const dnsMod = await import('@tcpip/dns');
             const dns = await dnsMod.createDns(stack.udp);
-            dns.serve({ port: 53, request: (q) => window.cosmicDnsHandler(q) });
-            console.log('[dns] resolver listening on 10.0.2.2:53');
+            if (p2pRole !== 'guest') {
+                dns.serve({ port: 53, request: (q) => window.cosmicDnsHandler(q) });
+                console.log('[dns] resolver listening on 10.0.2.2:53');
+            }
         } catch (e) {
             console.error('[dns] setup failed:', e);
         }
 
-        const httpMod = await import('@tcpip/http');
-        const http = await httpMod.createHttp(stack.tcp);
-        // 8080: the game's own setup server (dispatch2.ini points here).
-        // 80: browsers inside the VM. Same handler -- it routes on the Host
-        // header, so frogfind.com is proxied out while the game's own paths
-        // still resolve exactly as before.
-        http.serve({ port: 8080, handler: (r) => window.cosmicHttpHandler(r) });
-        http.serve({ port: 80, handler: (r) => window.cosmicHttpHandler(r) });
-
-        window.startCosmicGameServer(stack, 6666);
-        console.log('[net] shared stack ready: DHCP, DNS:53, HTTP:80/:8080, game:6666');
+        if (p2pRole !== 'guest') {
+            const httpMod = await import('@tcpip/http');
+            const http = await httpMod.createHttp(stack.tcp);
+            // 8080: the game's own setup server (dispatch2.ini points here).
+            // 80: browsers inside the VM.
+            http.serve({ port: 8080, handler: (r) => window.cosmicHttpHandler(r) });
+            http.serve({ port: 80, handler: (r) => window.cosmicHttpHandler(r) });
+            window.startCosmicGameServer(stack, 6666);
+            console.log('[net] host network ready: DHCP, DNS:53, HTTP:80/:8080, game:6666');
+        } else {
+            console.log('[net] guest network ready: services supplied by WebRTC host');
+        }
         return stack;
     })();
     return netStackPromise;
@@ -337,89 +392,6 @@ window.__imageCache = window.__imageCache || {};
 // filename -> in-flight fetch promise, so clients booting at the same time
 // share one download rather than racing to fetch the same image.
 window.__imagePending = window.__imagePending || {};
-// filename -> byte offsets of the computer-name value inside that image,
-// discovered once and reused by every VM. See findNameSites().
-window.__nameSites = window.__nameSites || {};
-
-// ── per-VM computer name ─────────────────────────────────────────────────
-//
-// Every client boots the same C: image, so every Win95 comes up calling itself
-// BEZERK. Two machines with one NetBIOS name on a segment is a conflict: the
-// second reports "a duplicate name exists on the network" and its networking
-// does not come up.
-//
-// The name lives in the registry hive inside the disk image as a length-
-// prefixed inline string:
-//
-//     0c 00 06 00 "ComputerName" "BEZERK"
-//     ^^^^^ ^^^^^  key len 12     value len 6
-//
-// so replacing it with another SIX-character name leaves every offset in the
-// hive untouched -- no need to understand the hive format beyond this.
-//
-// It must be anchored to the key, though. "BEZERK" appears 77 times in the
-// image and most are install paths (D:\PROGRA~1\BEZERK, Bezerk.url); only the
-// 8 ComputerName and 4 Comment sites are the machine name. A blind
-// search-and-replace would rewrite the game's own paths and break it.
-// OFF. Patching the name straight into the image does not work, and this is
-// why: the ComputerName values live inside CREG registry hives, in RGDB blocks
-// that carry a checksum in their header. Rewriting the value bytes leaves the
-// checksum stale, Windows decides the registry is damaged, and the machine
-// boots to a black screen -- Ctrl+Alt+Del then reports
-//
-//   Invalid VxD dynamic link call from VWIN32(01) ... to device "0009"
-//   Your Windows configuration is invalid. Run the Windows Setup program again
-//
-// because the VxDs cannot read their configuration. Same-length replacement is
-// necessary but NOT sufficient; the containing block's checksum has to be
-// recomputed too.
-//
-// Re-enabling this needs RGDB checksum fixup, which is worth doing only if
-// duplicate NetBIOS names actually cause a problem in practice. Leaving it off
-// costs nothing unless Windows complains about the duplicate name.
-const PATCH_COMPUTER_NAME = false;
-const VM_NAME_BASE = 'BEZERK';                       // what the image ships with
-const VM_NAME_ANCHORS = ['ComputerName', 'Comment']; // keys whose value is the name
-
-function computerNameFor(id) {
-    // Always exactly VM_NAME_BASE.length characters, so the hive is unchanged
-    // in size. Readable for the realistic range, base36 beyond it.
-    const n = (id <= 99)
-        ? 'BZRK' + String(id).padStart(2, '0')
-        : 'BZ' + id.toString(36).toUpperCase().padStart(4, '0');
-    return n.slice(0, VM_NAME_BASE.length);
-}
-
-// Locate every place the name is stored. Done ONCE per image, because the scan
-// is not cheap: 900 ms across the 90 MB C: drive, and 4.7 s across the 500 MB
-// D: drive purely to discover it holds no registry at all. Caching the offsets
-// turns every later boot into a handful of byte writes.
-function findNameSites(bytes) {
-    const enc = (s) => Array.from(s, (ch) => ch.charCodeAt(0));
-    const base = enc(VM_NAME_BASE);
-    const sites = [];
-    for (const anchor of VM_NAME_ANCHORS) {
-        const pat = enc(anchor).concat(base);
-        outer:
-        for (let i = 0; i + pat.length <= bytes.length; i++) {
-            for (let j = 0; j < pat.length; j++) {
-                if (bytes[i + j] !== pat[j]) continue outer;
-            }
-            sites.push(i + anchor.length);   // offset of the VALUE, not the key
-            i += pat.length - 1;
-        }
-    }
-    return sites;
-}
-
-function writeNameAt(bytes, sites, newName) {
-    if (newName.length !== VM_NAME_BASE.length) return 0;
-    for (const off of sites) {
-        for (let k = 0; k < newName.length; k++) bytes[off + k] = newName.charCodeAt(k);
-    }
-    return sites.length;
-}
-
 // Re-fetch one server script and swap it in place, keeping its <script> id so
 // the next reload can find it again.
 async function reloadServerScript(file, id, expectGlobal) {
@@ -439,8 +411,8 @@ async function reloadServerScript(file, id, expectGlobal) {
     // event, NOT thrown out of appendChild -- so the try/catch above cannot see
     // it and this used to claim success on a file that had not loaded at all.
     // Checking that the export actually landed is the only honest signal.
-    if (expectGlobal && typeof window[expectGlobal] !== 'function') {
-        console.error(`[reload] ${file} did not publish ${expectGlobal}() -- see the SyntaxError above; the OLD version is still live.`);
+    if (expectGlobal && !window[expectGlobal]) {
+        console.error(`[reload] ${file} did not publish ${expectGlobal} -- see the SyntaxError above; the OLD version is still live.`);
         return false;
     }
     console.log(`[reload] ${file} reloaded.`);
@@ -459,6 +431,16 @@ async function reloadCosmicServer() {
         // while Cosmic was actually answering.
         const previousProfile = (typeof window.getActiveGameProfile === 'function')
             ? window.getActiveGameProfile() : 'cosmic';
+
+        // Reload the common HTTP/path/static-file layer first. Cosmic's
+        // handler is reloaded immediately afterward, so its local helpers and
+        // the live request wrapper both see the new shared implementation.
+        if (document.getElementById('http-server-script')) {
+            if (!(await reloadServerScript('http-server.js', 'http-server-script', 'sharedHttpServer'))) {
+                return false;
+            }
+            console.log('[reload] shared HTTP server reloaded; listeners remain active on ports 80 and 8080.');
+        }
 
         // GTP first: cosmic-server.js's router looks up window.gtpHandleGameConnection
         // per connection, so it wants the new one in place before it goes live.
@@ -565,16 +547,22 @@ function getAudioWorkletUrl() {
 // old file is refused with a message instead of restoring nonsense.
 const SNAPSHOT_VERSION = 1;
 
-function get_tiny386(screen) {
+function get_tiny386(screen, wasmName, options) {
 
-// Identity for this emulated machine: drives its computer name (patched into
-// its disk copy below) and its virtual MAC on the shared segment.
+// The profile is part of this VM, not page-global state.  The browser UI
+// passes it before boot; keeping it here lets the image installer patch every
+// private copy consistently even when several clients start together.
+options = options || {};
+
+// Identity for this emulated machine: its virtual MAC on the shared segment.
 const vmId = ++window.__vmSeq;
 let mem8;
 let logger = null;
 let running = false;
 let audctx;
 let audioNode = null;        // AudioWorkletNode, or the legacy fallback
+let audioCaptureDestination = null;
+let audioCaptureSource = null;
 let audioPumpTimer = null;   // interval that tops up the ring buffer
 // How long one wasm_loop should block the main thread. Each round inside it is
 // PC_STEP_COUNT (10240) guest instructions plus a device sweep, and the wasm
@@ -591,6 +579,21 @@ const EMU_BLOCK_START_ROUNDS = 16;
 const EMU_BLOCK_MIN_ROUNDS = 2;
 const EMU_BLOCK_MAX_ROUNDS = 64;
 const EMU_BLOCK_DEFAULT_ROUNDS = 64;   // what the wasm uses if we never set it
+
+function connect_audio_capture(node) {
+    if (!audioCaptureDestination || !node || audioCaptureSource === node) return;
+    node.connect(audioCaptureDestination);
+    audioCaptureSource = node;
+}
+
+function get_audio_stream() {
+    if (!audctx || typeof audctx.createMediaStreamDestination !== 'function') return null;
+    if (!audioCaptureDestination) {
+        audioCaptureDestination = audctx.createMediaStreamDestination();
+        connect_audio_capture(audioNode);
+    }
+    return audioCaptureDestination.stream;
+}
 
 // Runs one slice of the emulator. Set once the VM is up; the audio worklet
 // calls it to keep the CPU stepping while the tab is hidden and setTimeout is
@@ -666,6 +669,107 @@ function dolog(s)
 {
     if (logger !== null)
         logger(s);
+}
+
+// ── boot status ────────────────────────────────────────────────────────────
+//
+// The log already says exactly what is happening. The trouble is that it is
+// hidden by default, so a client three minutes into a 43 MB download looks
+// identical to one that has silently died -- and the canvas is black either
+// way. dostatus() drives the window's status bar, one line and a progress bar,
+// so the common case needs no log at all.
+//
+//   phase   'wasm' | 'fetch' | 'extract' | 'boot' | 'run' | 'error'
+//   text    what to show
+//   loaded  bytes so far, when known
+//   total   bytes expected, when the server sent a Content-Length
+//
+// A phase with no total renders as an indeterminate bar rather than a
+// percentage. That distinction is load-bearing: zstd decompression is one
+// blocking call into the unzstd wasm and genuinely cannot report progress, and
+// a fake percentage crawling to 100% would be worse than an honest barber pole.
+let statusfn = null;
+function dostatus(phase, text, loaded, total)
+{
+    if (statusfn === null)
+        return;
+    // A throwing status callback must never be able to abort a boot.
+    try { statusfn({ phase: phase, text: text, loaded: loaded, total: total }); }
+    catch (e) { console.error('[status] callback failed:', e); }
+}
+
+// Progress for a SHARED download has to reach every client waiting on it, not
+// just the one that happened to start the fetch. Two windows started together
+// share one download through __imagePending, so without this the second would
+// sit on a bare "waiting" while the first showed a moving bar -- which is the
+// exact confusion this whole feature exists to remove.
+window.__imageProgress = window.__imageProgress || {};
+window.__imageWatchers = window.__imageWatchers || {};
+
+function watchImage(name, fn)
+{
+    const set = window.__imageWatchers[name] || (window.__imageWatchers[name] = new Set());
+    set.add(fn);
+    // Late subscribers get the current state immediately rather than waiting
+    // for the next chunk, which on a nearly-finished download could be never.
+    const now = window.__imageProgress[name];
+    if (now) fn(now);
+    return () => { set.delete(fn); };
+}
+
+function reportImage(name, st)
+{
+    window.__imageProgress[name] = st;
+    const set = window.__imageWatchers[name];
+    if (!set) return;
+    for (const fn of set) {
+        try { fn(st); } catch (e) { /* one bad watcher must not stall the rest */ }
+    }
+}
+
+function fmtBytes(n)
+{
+    if (!(n > 0)) return '0 MB';
+    if (n < 1048576) return Math.round(n / 1024) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+}
+
+/**
+ * fetch() that reports progress as the body arrives.
+ *
+ * Falls back to response.arrayBuffer() when the body is not a readable stream,
+ * so an environment without streaming still downloads -- it just cannot show a
+ * percentage. Content-Length is absent on a chunked or compressed response, in
+ * which case `total` is 0 and the caller shows an indeterminate bar.
+ */
+function fetchWithProgress(name, onProgress)
+{
+    return fetch(name, fetchopt).then(response => {
+        if (!response.ok)
+            throw new Error(name + ': HTTP ' + response.status);
+        const total = Number(response.headers.get('content-length')) || 0;
+        if (!response.body || typeof response.body.getReader !== 'function') {
+            onProgress(0, total);
+            return response.arrayBuffer();
+        }
+        const reader = response.body.getReader();
+        const chunks = [];
+        let loaded = 0;
+        const pump = () => reader.read().then(({ done, value }) => {
+            if (done) {
+                const out = new Uint8Array(loaded);
+                let off = 0;
+                for (const c of chunks) { out.set(c, off); off += c.length; }
+                return out.buffer;
+            }
+            chunks.push(value);
+            loaded += value.length;
+            onProgress(loaded, total);
+            return pump();
+        });
+        onProgress(0, total);
+        return pump();
+    });
 }
 
 function __console_print(ptr)
@@ -1063,21 +1167,6 @@ const imports = {
 
 const fetchopt = { cache: 'no-store' };
 
-// Give this VM its own identity inside its private disk copy. Runs on the
-// copy, never the cached master, so each machine gets a different name.
-function applyMachineIdentity(name, bytes) {
-    if (!PATCH_COMPUTER_NAME) return;
-    if (!(name in window.__nameSites)) {
-        // First time we have seen this image: find the sites once.
-        window.__nameSites[name] = findNameSites(bytes);
-    }
-    const sites = window.__nameSites[name];
-    if (!sites.length) return;               // e.g. the D: drive, no registry
-    const myName = computerNameFor(vmId);
-    writeNameAt(bytes, sites, myName);
-    dolog('computer name -> ' + myName + ' (' + sites.length + ' registry sites)\n');
-}
-
 // ── zstd-compressed disk images ────────────────────────────────────────────
 //
 // A .img.zst named in the .ini is fetched compressed and expanded here, which
@@ -1113,6 +1202,11 @@ function getUnzstd() {
 
 function unzstdBytes(name, bytes) {
     dolog('decompressing ' + name + ' (' + bytes.byteLength + ' bytes) ...\n');
+    // No `total`: unzstd() is a single blocking call into its own wasm, so
+    // there is no progress to report and the bar goes indeterminate. It is also
+    // the one step that freezes the page, which is precisely when the user most
+    // needs to be told what is happening.
+    reportImage(name, { phase: 'extract', text: 'Extracting ' + name + ' (' + fmtBytes(bytes.byteLength) + ')' });
     return getUnzstd().then(unzstd => {
         const out = unzstd(bytes);
         dolog('decompressed ' + name + ' -> ' + out.byteLength + ' bytes\n');
@@ -1145,6 +1239,7 @@ function setup_audio(ctx, h) {
         });
         node.connect(ctx.destination);
         audioNode = node;
+        connect_audio_capture(node);
 
         function pump() {
             // Re-read every time: memory.grow() detaches existing views, and
@@ -1221,6 +1316,7 @@ function setup_audio_legacy(ctx, h, audlen) {
     dummysrc.connect(audcb);
     dummysrc.start();
     audioNode = audcb;
+    connect_audio_capture(audcb);
 }
 
 function loads(files, i, cont) {
@@ -1242,17 +1338,28 @@ function loads(files, i, cont) {
         // unzstdBytes() -- almost always a stale main.js or a stale
         // __imageCache entry from a page load before .zst support existed.
         const install = (master) => {
+            // Its own status line because it is its own stall: this copies a
+            // 90-500 MB image synchronously, so the page stops responding for
+            // a beat with the download already at 100%.
+            dostatus('boot', 'Preparing ' + name + ' (' + fmtBytes(master.length) + ')');
             filestore[name] = master.slice();
-            applyMachineIdentity(name, filestore[name]);
             dolog(name + ': ' + filestore[name].length + ' bytes'
                   + (name.endsWith('.zst') ? ' (decompressed)' : '') + '\n');
         };
 
+        // Every path below this point ends in loads(files, i + 1, cont), so
+        // subscribe once here and drop the subscription on the way out. The
+        // watcher is shared with whichever client is actually doing the work,
+        // so a waiter sees the same bytes-so-far as the downloader.
+        const unwatch = watchImage(name, st => dostatus(st.phase, st.text, st.loaded, st.total));
+        const next = () => { unwatch(); loads(files, i + 1, cont); };
+
         const cached = window.__imageCache[name];
         if (cached) {
             dolog('reuse ' + name + ' (cached)\n');
+            dostatus('boot', 'Reusing ' + name + ' (already in memory)');
             install(cached);
-            loads(files, i + 1, cont);
+            next();
             return;
         }
         // A download already running for this image: wait on it instead of
@@ -1265,46 +1372,57 @@ function loads(files, i, cont) {
             dolog('wait ' + name + ' (already downloading)\n');
             pending.then(master => {
                 install(master);
-                loads(files, i + 1, cont);
+                next();
             }).catch(() => {
                 // The client that started the download already logged why.
                 dolog('giving up on ' + name + '\n');
+                dostatus('error', 'Could not load ' + name);
+                unwatch();
             });
             return;
         }
         dolog('fetch ' + name + ' ...\n');
-        const download = fetch(name, fetchopt)
-            .then(response => {
-                if (!response.ok)
-                    throw new Error(name + ': HTTP ' + response.status);
-                return response.arrayBuffer();
-            })
+        const download = fetchWithProgress(name, (loaded, total) => {
+            reportImage(name, {
+                phase: 'fetch',
+                text: 'Downloading ' + name
+                      + (total ? '' : ' (' + fmtBytes(loaded) + ')'),
+                loaded: loaded,
+                total: total,
+            });
+        })
             // Decompress BEFORE caching, so the cache holds plain image bytes:
             // N clients then share one download AND one decompression, and
-            // applyMachineIdentity below is patching a real disk image rather
-            // than compressed bytes. filestore stays keyed by the .zst name
-            // because that is what the .ini asked for -- the emulator just
-            // sees a larger file than it fetched.
+            // filestore stays keyed by the .zst name because that is what the
+            // ini asked for -- the emulator just sees a larger file than it
+            // fetched.
             .then(bytes => name.endsWith('.zst') ? unzstdBytes(name, bytes) : bytes)
             .then(bytes => {
                 const master = new Uint8Array(bytes);
                 window.__imageCache[name] = master;
                 delete window.__imagePending[name];
+                // Overwrite the last in-flight progress, so a client that
+                // subscribes later replays an accurate finished state rather
+                // than a stale "Downloading ... 100%".
+                reportImage(name, { phase: 'boot', text: 'Loaded ' + name });
                 return master;
             })
             .catch(err => {
                 delete window.__imagePending[name];
                 dolog('ERROR loading ' + name + ': ' + err.message + '\n');
+                reportImage(name, { phase: 'error', text: 'Failed: ' + err.message });
                 throw err;
             });
         window.__imagePending[name] = download;
         download.then(master => {
             install(master);
-            loads(files, i + 1, cont);
+            next();
         }).catch(err => {
             // Without this the chain just stops: cont() is never reached, the
             // VM never boots, and nothing says why.
             dolog('boot aborted: ' + err.message + '\n');
+            dostatus('error', 'Boot aborted: ' + err.message);
+            unwatch();
         });
     }
 }
@@ -1350,16 +1468,21 @@ function growWasmHeap(inst) {
 function start(inifile)
 {
     dolog('starting emulator (' + inifile + ') ...\n');
-    fetch('tiny386.wasm', fetchopt)
-        .then(response => {
-            if (!response.ok) throw new Error('tiny386.wasm: HTTP ' + response.status);
-            return response.arrayBuffer();
+    dostatus('wasm', 'Starting emulator');
+    fetchWithProgress('tiny386.wasm', (loaded, total) =>
+        dostatus('wasm', 'Downloading emulator core', loaded, total))
+        .then(bytes => {
+            dostatus('wasm', 'Compiling emulator core');
+            return WebAssembly.compile(bytes);
         })
-        .then(bytes => WebAssembly.compile(bytes))
         .then(module => new WebAssembly.Instance(module, imports))
         .then(instance1 => {
             instance = instance1;
-            if (!growWasmHeap(instance)) return;
+            dostatus('boot', 'Allocating memory');
+            if (!growWasmHeap(instance)) {
+                dostatus('error', 'This device cannot allocate enough memory');
+                return;
+            }
             mem8 = new Uint8Array(instance.exports.memory.buffer);
             dolog('ini file ' + inifile + '\n');
             loads([inifile], 0, () => {
@@ -1369,8 +1492,11 @@ function start(inifile)
                 const width = mem8[h1 + 19 * 4] | (mem8[h1 + 19 * 4 + 1] << 8);
                 const height = mem8[h1 + 20 * 4] | (mem8[h1 + 20 * 4 + 1] << 8);
                 loads(filestore_list, 0, () => {
+                    dostatus('boot', 'Starting the PC');
                     h2 = instance.exports.wasm_init(h1);
                     const fbptr = instance.exports.wasm_getfb(h2);
+                    if (h2 == 0)
+                        dostatus('error', 'The emulator refused to start (wasm_init failed)');
                     if (h2 != 0) {
                         register_kbdmouse(h2, instance.exports);
                         screen.focus();
@@ -1412,6 +1538,10 @@ function start(inifile)
                         ensureNetwork().catch(e => console.error('[net] setup failed:', e));
 
                         running = true;
+                        // Everything past here is the guest's own boot, and
+                        // the screen is its own progress indicator -- so the
+                        // status bar's job is done and the UI hides it.
+                        dostatus('run', 'Running');
                         // Single guarded entry point: wasm_loop must never be
                         // re-entered, and it now has two possible drivers
                         // (setTimeout when visible, the audio worklet when not).
@@ -1510,6 +1640,8 @@ function stop()
         visibilityHandler = null;
     }
     if (audioNode) { try { audioNode.disconnect(); } catch (e) { /* already gone */ } audioNode = null; }
+    audioCaptureSource = null;
+    audioCaptureDestination = null;
     if (audctx) { audctx.close(); audctx = null; }
     on_packet_cb_func = null;
     if (detachFromHub) { detachFromHub(); detachFromHub = null; }
@@ -1519,7 +1651,14 @@ return {
     start,
     stop,
     set_logger: function (o) { logger = o; },
+    // Optional companion to set_logger: the window's status bar. Kept separate
+    // so a page with an older ui.js simply never calls it and nothing breaks.
+    set_status: function (o) { statusfn = o; },
     send_kbd: function(down, key) { instance.exports.wasm_send_kbd(h2, down, key); },
+    get_audio_stream: function() { return get_audio_stream(); },
+    resume_audio: function() {
+        return audctx && audctx.resume ? audctx.resume() : Promise.resolve();
+    },
 
     /**
      * Snapshot the whole machine.

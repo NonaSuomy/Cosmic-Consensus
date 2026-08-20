@@ -32,6 +32,16 @@ function uiClientMarkup(id) {
 '</div>' +
 '<div class="window-body">' +
   '<center><canvas width="720" height="480" style="background-color:#000000;"></canvas></center>' +
+  // Boot status. Hidden until the first update arrives and hidden again once
+  // the VM is running, so a window that is not booting looks exactly as it did
+  // before. See uiSetStatus().
+  '<div data-act="statusbar" class="status-bar" style="display:none; margin-top:4px;">' +
+    '<div class="status-bar-field" data-act="statustext" style="flex-grow:2;">Idle</div>' +
+    '<div class="status-bar-field" data-act="statuspct" style="flex-grow:0; min-width:52px; text-align:right;"></div>' +
+  '</div>' +
+  '<div data-act="statusprog" class="progress-indicator segmented" style="display:none; height:18px; margin-top:2px;">' +
+    '<span class="progress-indicator-bar" style="width:0%;"></span>' +
+  '</div>' +
   '<div class="controls-row">' +
     '<select title="Which game disc this PC boots into. Pick before pressing Start.">' +
       '<option value="win95all.ini">beZerk Revived</option>' +
@@ -56,6 +66,7 @@ function uiClientMarkup(id) {
       'style="font-family: monospace; width: 150px;" ' +
       'title="Type with your device keyboard and press Enter to send it to this PC, followed by Return. Use this when the on-screen keyboard is awkward -- on a phone, tapping here raises the native keyboard.">' +
     '<button data-act="typesend" title="Send the text in the box to this PC (same as pressing Enter), without a trailing Return.">Send</button>' +
+    '<button data-act="paste" title="Read the system clipboard and paste its text into this PC.">Paste</button>' +
     '<button data-act="bksp" title="Send one Backspace to this PC. The type box cannot delete text already sent, so use this to correct the guest.">Backspace</button>' +
     '<button data-act="lmb" title="Send a left-click to this PC, wherever the guest pointer currently is. Useful on touch devices, where there is no real mouse button.">Left-Click</button>' +
     '<button data-act="dblclk" title="Send a left double-click to this PC, wherever the guest pointer currently is. The two clicks go out back to back, well inside the guest\'s double-click interval.">Double-Click</button>' +
@@ -72,6 +83,63 @@ function uiClientMarkup(id) {
     'Tab cycles the buttons' +
   '</div>' +
 '</div>';
+}
+
+/**
+ * Render one boot-status update into a client window.
+ *
+ * `st` comes from main.js's dostatus(): { phase, text, loaded, total }.
+ *
+ *   phase 'run'    the guest is up -- hide the bar, the screen speaks for itself
+ *   phase 'error'  leave it up and visible; this is the case the log used to
+ *                  swallow entirely
+ *   total > 0      determinate bar with a percentage
+ *   no total       indeterminate (the segmented 98.css bar, animated by CSS),
+ *                  which is what zstd extraction honestly is
+ *
+ * Safe to call before the window has a status bar: a page still running the
+ * pre-status ui.js simply has no elements to find, and this returns quietly
+ * rather than throwing into the boot chain.
+ */
+function uiSetStatus(c, st) {
+    if (!c || !c.win || !st) return;
+    const bar = c.win.querySelector('[data-act="statusbar"]');
+    const prog = c.win.querySelector('[data-act="statusprog"]');
+    if (!bar || !prog) return;
+    const text = bar.querySelector('[data-act="statustext"]');
+    const pct = bar.querySelector('[data-act="statuspct"]');
+    const fill = prog.querySelector('.progress-indicator-bar');
+
+    if (st.phase === 'run') {
+        bar.style.display = 'none';
+        prog.style.display = 'none';
+        return;
+    }
+
+    bar.style.display = '';
+    text.textContent = st.text || '';
+
+    const total = Number(st.total) || 0;
+    const loaded = Number(st.loaded) || 0;
+    if (total > 0) {
+        const p = Math.max(0, Math.min(100, Math.round((loaded / total) * 100)));
+        prog.style.display = '';
+        prog.classList.remove('segmented');
+        fill.style.width = p + '%';
+        pct.textContent = p + '%';
+    } else if (st.phase === 'error') {
+        // No bar at all on an error -- a stalled progress bar reads as "still
+        // working", which is the opposite of what happened.
+        prog.style.display = 'none';
+        pct.textContent = '';
+    } else {
+        // Indeterminate: the segmented bar filled to 100% is 98.css's barber
+        // pole, and says "working, duration unknown".
+        prog.style.display = '';
+        prog.classList.add('segmented');
+        fill.style.width = '100%';
+        pct.textContent = '';
+    }
 }
 
 function uiWireControls(c, win, api) {
@@ -195,6 +263,21 @@ function uiWireControls(c, win, api) {
         });
         box.addEventListener('keyup', (e) => e.stopPropagation());
         win.querySelector('[data-act="typesend"]').addEventListener('click', () => push(false));
+
+        const paste = async () => {
+            if (!c.inst) { api.conlog('[ui] Start this PC before pasting text.'); return; }
+            if (typeof c.inst.send_text !== 'function') {
+                api.conlog('[ui] This page has a stale main.js (no send_text); refresh the page.');
+                return;
+            }
+            try {
+                const text = await navigator.clipboard.readText();
+                if (text) c.inst.send_text(text);
+            } catch (err) {
+                api.conlog('[ui] Clipboard paste was blocked. Click the page first or use the type box.');
+            }
+        };
+        win.querySelector('[data-act="paste"]').addEventListener('click', paste);
     }
 
     // Press-then-release at the pointer's current position -- the
@@ -261,5 +344,6 @@ function uiRebuildClient(c, api, wireChrome) {
 window.uiClientMarkup = uiClientMarkup;
 window.uiWireControls = uiWireControls;
 window.uiRebuildClient = uiRebuildClient;
+window.uiSetStatus = uiSetStatus;
 
 })();

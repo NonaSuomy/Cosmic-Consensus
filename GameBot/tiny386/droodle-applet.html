@@ -186,6 +186,25 @@ input[type=text] {
 .ok  { color: #006600; font-weight: bold; }
 .bad { color: #a00000; font-weight: bold; }
 
+/* ── local batch conversion ───────────────────────────────────────────── */
+.batch-drop {
+  border: 2px dashed var(--face-dim); background: #fff; padding: 10px 8px;
+  text-align: center; cursor: pointer; line-height: 1.4;
+}
+.batch-drop.dragover { background: #dbe8f5; border-color: var(--title); }
+.batch-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px;
+  overflow: auto; margin-top: 7px; }
+.batch-item { display: grid; grid-template-columns: 18px 58px 1fr auto; gap: 6px;
+  align-items: center; border: 1px inset var(--face); background: #fff; padding: 3px; }
+.batch-item img { width: 56px; height: 44px; object-fit: contain; background: #000; }
+.batch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-meta { color: var(--hint); font-size: 10px; }
+.batch-progress { width: 100%; height: 13px; display: block; }
+.batch-status { font-size: 10px; white-space: nowrap; }
+.batch-status.ok { color: #006600; }
+.batch-status.bad { color: #a00000; }
+.batch-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+
 /* ── the agreement, kept as the original wrote it ──────────────────────── */
 details.legal { margin: 10px; border: 2px groove var(--face-lit); background: var(--face); }
 details.legal summary { padding: 6px 9px; cursor: pointer; font-weight: bold; }
@@ -286,6 +305,22 @@ details.legal p { margin: 0 0 8px; }
       <fieldset>
         <legend>Game format</legend>
         <dl class="spec" id="spec"></dl>
+      </fieldset>
+
+      <fieldset>
+        <legend>Batch GTP images</legend>
+        <div class="batch-drop" id="batch-drop" tabindex="0" role="button"
+             aria-label="Add images for batch conversion">
+          Drop any number of images here<br><b>or click to choose files</b>
+          <input id="batch-files" type="file" accept="image/*" multiple hidden>
+        </div>
+        <div class="batch-actions">
+          <button class="btn" id="batch-process" disabled>Process images</button>
+          <button class="btn" id="batch-zip" disabled>Download selected ZIP</button>
+          <button class="btn" id="batch-clear" disabled>Clear list</button>
+        </div>
+        <div class="note" id="batch-status">Everything stays in this browser; no files are uploaded.</div>
+        <div class="batch-list" id="batch-list"></div>
       </fieldset>
     </div>
   </div>
@@ -528,10 +563,10 @@ addEventListener("keydown", (e) => {
    The frame. Navy ground, doubled green rule with art-nouveau corner curls,
    and the credit set in a serif to match the originals.
    ═══════════════════════════════════════════════════════════════════════ */
-function drawFrame(g, withFrame, name) {
+function drawFrame(g, withFrame, name, sourceArt = art) {
   if (!withFrame) {
     g.imageSmoothingEnabled = false;
-    g.drawImage(art, 0, 0);
+    g.drawImage(sourceArt, 0, 0);
     return;
   }
   const GRN = "#9bce84";
@@ -604,7 +639,7 @@ function drawFrame(g, withFrame, name) {
 
   // art window
   g.imageSmoothingEnabled = false;
-  g.drawImage(art, ART_X, ART_Y);
+  g.drawImage(sourceArt, ART_X, ART_Y);
   g.strokeStyle = "#001a33"; g.lineWidth = 1;
   g.strokeRect(ART_X - .5, ART_Y - .5, ART_W + 1, ART_H + 1);
 
@@ -1020,6 +1055,216 @@ function savePNG(framed) {
   drawFrame(c.getContext("2d"), framed, creditName());
   c.toBlob((b) => download(b, "Droodle_" + fileStem() + (framed ? "_framed" : "") + ".png"), "image/png");
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Local batch conversion.
+
+   This deliberately uses the same 275x216 framed canvas and the same custom
+   baseline 4:4:4 encoder as the single-image Save command. Nothing leaves the
+   browser: the input files are object URLs, the converted bytes live in
+   memory, and the ZIP is assembled with the uncompressed ZIP "store" method.
+   ═══════════════════════════════════════════════════════════════════════ */
+const batchItems = [];
+let batchBusy = false;
+let batchZipBusy = false;
+let batchCrcTable = null;
+
+function batchSafeStem(name, fallback) {
+  const stem = String(name || "").replace(/\.[^.]*$/, "")
+    .replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");
+  return stem || fallback;
+}
+
+function batchThumbnail(img) {
+  const c = document.createElement("canvas");
+  c.width = 110; c.height = 86;
+  const g = c.getContext("2d");
+  g.fillStyle = "#003366"; g.fillRect(0, 0, c.width, c.height);
+  const s = Math.min(c.width / img.width, c.height / img.height);
+  const w = Math.max(1, Math.round(img.width * s));
+  const h = Math.max(1, Math.round(img.height * s));
+  g.imageSmoothingEnabled = true;
+  g.drawImage(img, (c.width - w) / 2, (c.height - h) / 2, w, h);
+  return c.toDataURL("image/jpeg", .78);
+}
+
+function batchLoadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("not a readable image")); };
+    img.src = url;
+  });
+}
+
+function batchArtFromImage(img) {
+  const c = document.createElement("canvas");
+  c.width = ART_W; c.height = ART_H;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.fillStyle = "#fff"; g.fillRect(0, 0, ART_W, ART_H);
+  const s = Math.min(ART_W / img.width, ART_H / img.height);
+  const w = Math.max(1, Math.round(img.width * s));
+  const h = Math.max(1, Math.round(img.height * s));
+  g.imageSmoothingEnabled = true;
+  g.drawImage(img, (ART_W - w) / 2, (ART_H - h) / 2, w, h);
+  const data = g.getImageData(0, 0, ART_W, ART_H), p = data.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const lum = .299 * p[i] + .587 * p[i + 1] + .114 * p[i + 2];
+    const v = lum > 128 ? 255 : 0;
+    p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 255;
+  }
+  g.putImageData(data, 0, 0);
+  return c;
+}
+
+function batchSetStatus(item, text, percent, kind) {
+  item.status = text;
+  if (item.statusEl) {
+    item.statusEl.textContent = text;
+    item.statusEl.className = "batch-status" + (kind ? " " + kind : "");
+  }
+  if (item.progressEl) item.progressEl.value = Math.max(0, Math.min(100, percent));
+}
+
+function renderBatchList() {
+  const list = document.getElementById("batch-list");
+  list.textContent = "";
+  for (const item of batchItems) {
+    const row = document.createElement("div"); row.className = "batch-item";
+    const check = document.createElement("input"); check.type = "checkbox"; check.checked = item.selected;
+    check.title = "Include this image in the ZIP";
+    check.addEventListener("change", () => { item.selected = check.checked; updateBatchButtons(); });
+    const thumb = document.createElement("img"); thumb.src = item.thumbnail; thumb.alt = "";
+    const middle = document.createElement("div");
+    const name = document.createElement("div"); name.className = "batch-name"; name.textContent = item.file.name;
+    const meta = document.createElement("div"); meta.className = "batch-meta";
+    meta.textContent = Math.max(1, Math.round(item.file.size / 1024)).toLocaleString() + " KB";
+    const progress = document.createElement("progress"); progress.className = "batch-progress";
+    progress.max = 100; progress.value = item.progress || 0;
+    const status = document.createElement("div"); status.className = "batch-status"; status.textContent = item.status;
+    middle.append(name, meta, progress, status);
+    const one = document.createElement("button"); one.className = "btn"; one.textContent = "Save";
+    one.disabled = !item.bytes;
+    one.addEventListener("click", () => download(new Blob([item.bytes], { type: "image/jpeg" }), item.outputName));
+    row.append(check, thumb, middle, one); list.appendChild(row);
+    item.progressEl = progress; item.statusEl = status; item.saveEl = one;
+  }
+  updateBatchButtons();
+}
+
+function updateBatchButtons() {
+  const process = document.getElementById("batch-process");
+  const zip = document.getElementById("batch-zip");
+  const clear = document.getElementById("batch-clear");
+  process.disabled = batchBusy || !batchItems.length || batchItems.every((item) => item.bytes);
+  zip.disabled = batchBusy || !batchItems.some((item) => item.selected && item.bytes);
+  clear.disabled = batchBusy || !batchItems.length;
+}
+
+function addBatchFiles(files) {
+  const existing = new Set(batchItems.map((item) => item.file.name + ":" + item.file.size + ":" + item.file.lastModified));
+  for (const file of files) {
+    const imageLike = file.type.startsWith("image/") ||
+      /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i.test(file.name);
+    if (!imageLike) continue;
+    const key = file.name + ":" + file.size + ":" + file.lastModified;
+    if (existing.has(key)) continue;
+    existing.add(key);
+    const item = { file, selected: true, thumbnail: "", status: "Queued", progress: 0, bytes: null };
+    batchItems.push(item);
+    batchLoadImage(file).then((img) => { item.thumbnail = batchThumbnail(img); item.image = img; renderBatchList(); })
+      .catch(() => batchSetStatus(item, "Could not read", 0, "bad"));
+  }
+  renderBatchList();
+  document.getElementById("batch-status").textContent = batchItems.length
+    ? batchItems.length + " image(s) queued."
+    : "No supported image files added.";
+}
+
+async function processBatch() {
+  if (batchBusy) return;
+  batchBusy = true; updateBatchButtons();
+  const credit = creditName();
+  let done = 0;
+  for (const item of batchItems) {
+    if (item.bytes) { done++; continue; }
+    try {
+      batchSetStatus(item, "Loading", 10);
+      const img = item.image || await batchLoadImage(item.file);
+      item.image = img; if (!item.thumbnail) item.thumbnail = batchThumbnail(img);
+      batchSetStatus(item, "Converting", 35);
+      const localArt = batchArtFromImage(img);
+      const framed = document.createElement("canvas"); framed.width = FR_W; framed.height = FR_H;
+      drawFrame(framed.getContext("2d"), true, credit, localArt);
+      batchSetStatus(item, "Encoding GTP JPEG", 65);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      item.bytes = encodeJPEG(framed, 88);
+      const baseName = "Droodle_" + batchSafeStem(item.file.name, "image_" + (done + 1));
+      let outputName = baseName + ".jpg", suffix = 2;
+      while (batchItems.some((other) => other !== item && other.outputName === outputName)) {
+        outputName = baseName + "_" + suffix++ + ".jpg";
+      }
+      item.outputName = outputName;
+      batchSetStatus(item, "Ready", 100, "ok");
+      if (item.saveEl) item.saveEl.disabled = false;
+      done++;
+    } catch (err) {
+      batchSetStatus(item, "Failed: " + (err.message || "image error"), 0, "bad");
+    }
+    document.getElementById("batch-status").textContent = done + "/" + batchItems.length + " image(s) processed.";
+  }
+  batchBusy = false; updateBatchButtons();
+}
+
+function crc32(bytes) {
+  if (!batchCrcTable) {
+    batchCrcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); batchCrcTable[n] = c >>> 0; }
+  }
+  let c = 0xFFFFFFFF;
+  for (const b of bytes) c = batchCrcTable[(c ^ b) & 255] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function makeZip(entries) {
+  const chunks = [], central = []; let offset = 0;
+  const u16 = (n) => Uint8Array.from([n & 255, (n >>> 8) & 255]);
+  const u32 = (n) => Uint8Array.from([n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]);
+  const join = (...parts) => { const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0)); let at = 0; for (const p of parts) { out.set(p, at); at += p.length; } return out; };
+  for (const entry of entries) {
+    const name = new TextEncoder().encode(entry.outputName), data = entry.bytes, crc = crc32(data);
+    const local = join(Uint8Array.from([0x50,0x4b,0x03,0x04]), u16(20), u16(0x800), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), name, data);
+    chunks.push(local);
+    central.push(join(Uint8Array.from([0x50,0x4b,0x01,0x02]), u16(20), u16(20), u16(0x800), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), name));
+    offset += local.length;
+  }
+  const centralBytes = join(...central);
+  const body = join(...chunks, centralBytes, Uint8Array.from([0x50,0x4b,0x05,0x06]), u16(0), u16(0), u16(entries.length), u16(entries.length), u32(centralBytes.length), u32(offset), u16(0));
+  return body;
+}
+
+async function downloadBatchZip() {
+  if (batchZipBusy) return;
+  const entries = batchItems.filter((item) => item.selected && item.bytes);
+  if (!entries.length) return;
+  batchZipBusy = true; updateBatchButtons();
+  document.getElementById("batch-status").textContent = "Building ZIP…";
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const zip = makeZip(entries);
+  download(new Blob([zip], { type: "application/zip" }), "Droodle_GTP_batch.zip");
+  document.getElementById("batch-status").textContent = entries.length + " image(s) downloaded as a ZIP.";
+  batchZipBusy = false; updateBatchButtons();
+}
+
+document.getElementById("batch-drop").addEventListener("click", () => document.getElementById("batch-files").click());
+document.getElementById("batch-drop").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); document.getElementById("batch-files").click(); } });
+document.getElementById("batch-drop").addEventListener("dragover", (e) => { e.preventDefault(); e.currentTarget.classList.add("dragover"); });
+document.getElementById("batch-drop").addEventListener("dragleave", (e) => e.currentTarget.classList.remove("dragover"));
+document.getElementById("batch-drop").addEventListener("drop", (e) => { e.preventDefault(); e.currentTarget.classList.remove("dragover"); addBatchFiles(e.dataTransfer.files); });
+document.getElementById("batch-files").addEventListener("change", (e) => { addBatchFiles(e.target.files); e.target.value = ""; });
+document.getElementById("batch-process").addEventListener("click", processBatch);
+document.getElementById("batch-zip").addEventListener("click", downloadBatchZip);
+document.getElementById("batch-clear").addEventListener("click", () => { if (batchBusy) return; batchItems.length = 0; renderBatchList(); document.getElementById("batch-status").textContent = "Everything stays in this browser; no files are uploaded."; });
 
 /* ── a starting droodle, so the surface is never a blank stare ─────────── */
 (function seed() {

@@ -125,6 +125,14 @@ let nextHttpPlayerId = 1000;
 // HTTP_ACCEPT_ANY_LOGIN = true means any username/password is accepted
 const HTTP_ACCEPT_ANY_LOGIN = true;
 const httpUsers = new Map();
+// CosmicConsensus.exe authenticates over HTTP, then opens IRC and sends its
+// saved registry profile in the L line. Keep the short-lived HTTP names so
+// the IRC connection can use what the player actually typed in the login box.
+const pendingHttpLogins = [];
+// GTP shares the same HTTP login endpoint but has its own IRC handler. Expose
+// the short-lived queue so that handler can apply the username typed in the
+// login form instead of trusting a stale registry name from the disk image.
+window.__pendingHttpLogins = pendingHttpLogins;
 
 const HTTP_MIME = {
   '.ini': 'text/plain',
@@ -267,7 +275,22 @@ function loginSuccessResponse(playerName, playerId, sessionId) {
     `player_id=${playerId}\n` +
     `playersession_id=${sessionId}\n` +
     `session_id=${sessionId}\n` +
-    `adult=1\n` +
+    // 'Y', not '1'. Get The Picture's validate callback (0x411955 in
+    // GetThePicture.exe) scans the reply for a line starting "adult" and then
+    // tests exactly one byte:
+    //
+    //     strncmp(line, "adult", 5) == 0
+    //     flag = line[strlen("adult") + 1] == 'Y'     // i.e. the char after '='
+    //
+    // so "adult=1" reads as FALSE. That flag is what unlocks the room
+    // selector's Adult / Keep It Clean tabs (it reaches the screen through
+    // 0x405fa9, which gates the two tab controls at +0x8c and +0x90), so with
+    // '1' the player silently only ever sees the clean rooms.
+    //
+    // Safe for the other shows: CosmicConsensus.exe contains no "adult" string
+    // at all and ignores the field, and Cosmic's login is answered from
+    // static/cgi/bigval0.cgi rather than here anyway.
+    `adult=Y\n` +
     `score=1\n` +
     `ngames=2\n` +
     `effective_date=${effectiveDateString()}\n`;
@@ -295,6 +318,9 @@ function handleLogin(params) {
   }
 
   if (HTTP_ACCEPT_ANY_LOGIN) {
+    pendingHttpLogins.push({ name: playerName, at: Date.now() });
+    while (pendingHttpLogins.length && Date.now() - pendingHttpLogins[0].at > 60000)
+      pendingHttpLogins.shift();
     if (!httpUsers.has(playerName)) {
       httpUsers.set(playerName, nextHttpPlayerId);
       console.log(`[http] New player: ${playerName} -> id=${nextHttpPlayerId}`);
@@ -353,7 +379,9 @@ async function handleGet(url) {
   // Some legacy game-exe builds send request paths with backslashes
   // instead of forward slashes -- normalize before routing (same fix
   // applied to the Python servers).
-  const path = url.pathname.replace(/\\/g, '/');
+  const path = window.sharedHttpServer
+    ? window.sharedHttpServer.normalizePath(url.pathname)
+    : url.pathname.replace(/\\/g, '/').replace(/^\/+/, '/');
   console.log(`[http] GET ${path}`);
 
   // The real client requests sponsor ads with a lowercase ".../content/ads/..."
@@ -422,7 +450,9 @@ function handleAcroLogin(params) {
 }
 
 async function handlePost(request, url) {
-  const path = url.pathname.replace(/\\/g, '/');
+  const path = window.sharedHttpServer
+    ? window.sharedHttpServer.normalizePath(url.pathname)
+    : url.pathname.replace(/\\/g, '/').replace(/^\/+/, '/');
   const bodyText = await request.text();
   const params = new URLSearchParams(bodyText);
   console.log(`[http] POST ${path} params=${bodyText}`);
@@ -434,7 +464,8 @@ async function handlePost(request, url) {
   // A client that picked up the remote's dispatch.ini posts to /big/validate.cgi
   // and got "Unknown POST path" here, so the login simply never completed.
   // All of these are the same request with the same fields.
-  if (path === '/cgi/acrval0.cgi' || path === '/cgi/acrval1.cgi'
+  if (path === '/cgi/bigval0.cgi'
+      || path === '/cgi/acrval0.cgi' || path === '/cgi/acrval1.cgi'
       || path === '/cgi/bezreg0.cgi'
       || path === '/cgi/gtpval0.cgi' || path === '/big/validate.cgi') {
     // Cosmic and Acrophobia BOTH post to /cgi/acrval0.cgi, but they want
@@ -951,7 +982,15 @@ async function proxyExternal(url, request = null) {
 }
 
 async function cosmicHttpHandler(request) {
-  const url = new URL(request.url);
+  let url = new URL(request.url);
+  // Keep all game profiles tolerant of the double-slash paths emitted by
+  // some Win95 HTTP clients.  The URL object preserves those slashes.
+  const normalizedPath = window.sharedHttpServer
+    ? window.sharedHttpServer.normalizePath(url.pathname)
+    : url.pathname.replace(/^\/+/, '/');
+  if (normalizedPath !== url.pathname) {
+    url.pathname = normalizedPath;
+  }
   try {
     // BEFORE the host check: the client asks for dispatch.ini with the
     // REMOTE's hostname, so a Host-based proxy rule would forward it and we
@@ -4395,7 +4434,17 @@ class GameClient {
 
   async handleL(body) {
     const fields = body.split('L ').slice(1).join('L ').split(' ');
-    const username = fields.length ? fields[0] : this.nick || '';
+    const wireUsername = fields.length ? fields[0] : this.nick || '';
+    const now = Date.now();
+    while (pendingHttpLogins.length && now - pendingHttpLogins[0].at > 60000)
+      pendingHttpLogins.shift();
+    const webLogin = pendingHttpLogins.shift();
+    const requestedUsername = webLogin ? webLogin.name : wireUsername;
+    this.wireUsername = wireUsername;
+    if (webLogin && webLogin.name !== wireUsername) {
+      console.log(`[game] HTTP profile "${webLogin.name}" overrides stale registry L name "${wireUsername}".`);
+    }
+    let username = requestedUsername;
     let versionStr;
     if (fields.length >= 7) {
       versionStr = 'Version ' + fields.slice(3, 7).join(' ');
@@ -4748,6 +4797,64 @@ class GameClient {
     await this.sendLock.withLock(() => this.botPriv(this.clientIrcName, 'BI 1'));
   }
 
+  /**
+   * Relay the chat packets emitted by the game client.  The client sends the
+   * visible sender name as part of the packet, but that name can be stale when
+   * two browser clients started with the same saved profile.  Always use the
+   * identity assigned to this connection so the recipient can address the
+   * correct player.
+   */
+  async handleChat(body) {
+    // The Windows client commonly terminates these packets with a space.
+    // Trim it first so it cannot be mistaken for an extra sender field.
+    const parts = body.trim().split(/\s+/);
+    const tag = parts.shift();
+    if (!this.username) return;
+
+    if (tag === 'PRC') {
+      // PRC <text> <FROM> <TO>; text may contain spaces.
+      const to = parts.pop() || '';
+      if (parts.length) parts.pop(); // discard the client's stale FROM
+      const text = parts.join(' ');
+      const target = [...liveGameClients].find((client) =>
+        client.connected && client.username &&
+        client.username.toLowerCase() === to.toLowerCase()
+      );
+      if (!target) {
+        await this.botPriv(this.clientIrcName, `PUC ${to} is not here. ${BOT_NICK}`);
+        return;
+      }
+      await target.sendRaw(
+        `:${BOT_NICK}!${BOT_NICK}@${SERVER_NAME} PRIVMSG ${target.clientIrcName} :PRC ${text} ${target.username} ${this.username}`
+      );
+      if (target !== this) {
+        await this.sendRaw(
+          `:${BOT_NICK}!${BOT_NICK}@${SERVER_NAME} PRIVMSG ${this.clientIrcName} :PRC ${text} ${this.username} ${target.username}`
+        );
+      }
+      console.log(`[game] STAT: private chat "${this.username}" -> "${target.username}".`);
+      return;
+    }
+
+    // PUC/MC/HC <text> [FROM]. Drop the stale optional sender and append the
+    // canonical one.  This works for both lobby and in-room chat.
+    // The final field is the client's sender field even when it is stale.
+    // Remove it unconditionally and replace it with the canonical identity.
+    if (parts.length) parts.pop();
+    const recipients = this.room
+      ? this.room.clients
+      : [...liveGameClients].filter((client) => client.ingame === 0);
+    for (const client of recipients) {
+      if (client.connected && client.username) {
+        const outgoing = `${tag} ${parts.join(' ')} ${this.username}`;
+        Promise.resolve(client.sendRaw(
+          `:${BOT_NICK}!${BOT_NICK}@${SERVER_NAME} PRIVMSG ${client.clientIrcName} :${outgoing}`
+        )).catch(() => {});
+      }
+    }
+    console.log(`[game] STAT: ${tag} chat from "${this.username}".`);
+  }
+
   async handlePrivmsg(args) {
     if (args.length < 2) return;
     const body = args[1];
@@ -4779,22 +4886,7 @@ class GameClient {
       await this.handleBI(body);
     } else if (body.startsWith('PUC ') || body.startsWith('PRC ')
                || body.startsWith('MC ') || body.startsWith('HC ')) {
-      // Lobby chat, relayed verbatim to every OTHER client in the lobby:
-      //   PUC public   PRC private   MC "/me"   HC host
-      // This was missing entirely -- the JS port never relayed chat, so
-      // anything typed in the lobby went nowhere. The server does not
-      // interpret the payload, it just fans it out, exactly as the Python
-      // does. Sent direct rather than through botPriv so a HOST typing in
-      // the lobby cannot trigger the in-game broadcast path.
-      const relayed = [...liveGameClients].filter(
-        (c) => c !== this && c.connected && c.ingame === 0 && c.username
-      );
-      for (const other of relayed) {
-        Promise.resolve(other.sendRaw(
-          `:${BOT_NICK}!${BOT_NICK}@${SERVER_NAME} PRIVMSG ${other.clientIrcName} :${body}`
-        )).catch(() => {});
-      }
-      console.log(`[game] STAT: lobby chat from "${this.username}" -> ${relayed.length} listener(s): ${JSON.stringify(body)}`);
+      await this.handleChat(body);
     } else if (this.ingame === 1) {
       await this.sendElapsedSt();
     } else {

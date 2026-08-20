@@ -49,4 +49,144 @@ window.ydkjProfile = {
   staticRoot: YDKJ_STATIC_ROOT,
   httpOnly: true,
 };
+
+// Optional browser-to-browser spectator/player mode.  The actual YDKJ VM
+// remains on the host; guests receive its canvas as a WebRTC video track and
+// send only Q/B/P buzzer presses back over a small ordered data channel.
+let ydkjHostCanvas = null;
+let ydkjHostInstance = null;
+let ydkjAssignedKey = '';
+
+function ydkjP2PStatus(text) {
+  const node = document.getElementById('ydkj-p2p-status');
+  if (node) node.textContent = text;
+  ydkjLog(text);
+}
+
+function ydkjSetGuestKey(key) {
+  ydkjAssignedKey = String(key || '').toUpperCase();
+  for (const button of document.querySelectorAll('[data-ydkj-buzzer]')) {
+    button.disabled = button.dataset.ydkjBuzzer !== ydkjAssignedKey;
+  }
+  ydkjP2PStatus(ydkjAssignedKey ? `Assigned buzzer: ${ydkjAssignedKey}` : 'Waiting for a buzzer assignment');
+}
+
+function ydkjSetAnswerEnabled(enabled) {
+  for (const button of document.querySelectorAll('[data-ydkj-answer]')) {
+    button.disabled = !enabled;
+  }
+  for (const button of document.querySelectorAll('[data-ydkj-screw]')) {
+    button.disabled = !enabled;
+  }
+  ydkjP2PStatus(enabled ? 'Buzz accepted; choose answer 1–4' : 'Waiting for your buzzer');
+}
+
+function ydkjReceiveStream(stream) {
+  const video = document.getElementById('ydkj-remote-video');
+  if (!video) return;
+  video.srcObject = stream;
+  video.hidden = false;
+  video.play().catch(() => { /* muted autoplay may still need a click */ });
+  ydkjP2PStatus('Receiving the host YDKJ screen');
+}
+
+function ydkjStartHostStream() {
+  // Prefer the currently focused emulator.  This also covers the common case
+  // where the user boots the Net Show executable from a general Win95 image
+  // rather than selecting the dedicated Net Show profile first.
+  if (!ydkjHostCanvas) {
+    const active = window.__tiny386ActiveClient;
+    const candidates = [active, ...(window.__tiny386Clients || []).slice().reverse()]
+      .filter((item, index, all) => item && all.indexOf(item) === index);
+    const candidate = candidates.find((item) => item && item.canvas && item.inst);
+    if (candidate) {
+      ydkjHostCanvas = candidate.canvas;
+      ydkjHostInstance = candidate.inst;
+    }
+  }
+  if (!ydkjHostCanvas || typeof ydkjHostCanvas.captureStream !== 'function') {
+    ydkjP2PStatus('Start a YDKJ emulator first; this browser cannot capture its canvas');
+    return false;
+  }
+  const videoStream = ydkjHostCanvas.captureStream(15);
+  // The emulator's audio is rendered through its own WebAudio graph, so a
+  // canvas capture alone cannot carry it.  Feed that graph into a media
+  // destination and combine its track with the canvas track.
+  if (ydkjHostInstance && typeof ydkjHostInstance.resume_audio === 'function') {
+    ydkjHostInstance.resume_audio().catch(() => { /* browser may already be running */ });
+  }
+  const audioStream = ydkjHostInstance && typeof ydkjHostInstance.get_audio_stream === 'function'
+    ? ydkjHostInstance.get_audio_stream() : null;
+  const tracks = videoStream.getTracks();
+  if (audioStream && audioStream.getAudioTracks) tracks.push(...audioStream.getAudioTracks());
+  const stream = typeof MediaStream === 'function' ? new MediaStream(tracks) : videoStream;
+  if (!window.p2pBridge || typeof window.p2pBridge.setYdkjStream !== 'function') {
+    ydkjP2PStatus('P2P bridge is not loaded');
+    return false;
+  }
+  window.p2pBridge.setYdkjStream(stream);
+  ydkjP2PStatus(audioStream && audioStream.getAudioTracks().length
+    ? 'Screen and audio ready; create a new host offer for each guest'
+    : 'Screen ready; audio capture is unavailable in this browser');
+  return true;
+}
+
+window.ydkjP2P = {
+  setHostInstance(canvas, instance) {
+    ydkjHostCanvas = canvas || null;
+    ydkjHostInstance = instance || null;
+  },
+  startHostStream: ydkjStartHostStream,
+  receiveStream: ydkjReceiveStream,
+  assignedKey() { return ydkjAssignedKey; },
+};
+
+if (window.p2pBridge) {
+  window.p2pBridge.setYdkjCommandCallback((message, peer) => {
+    if (ydkjHostInstance && typeof ydkjHostInstance.send_text === 'function') {
+      if (message.type === 'buzzer') {
+        ydkjHostInstance.send_text(String(message.key).toLowerCase());
+        ydkjP2PStatus(`Guest buzzer ${message.key} sent to the emulator`);
+      } else if (message.type === 'answer') {
+        ydkjHostInstance.send_text(String(message.answer));
+        ydkjP2PStatus(`Guest answer ${message.answer} sent to the emulator`);
+      } else if (message.type === 'screw') {
+        ydkjHostInstance.send_text('s');
+        ydkjP2PStatus('Guest screw action sent to the emulator');
+      }
+    }
+  });
+  window.p2pBridge.setYdkjAssignmentCallback(ydkjSetGuestKey);
+  window.p2pBridge.setYdkjBuzzerResultCallback((accepted, reset) => {
+    ydkjSetAnswerEnabled(!!accepted && !reset);
+  });
+}
+
+function bindYdkjP2PUI() {
+  const start = document.getElementById('ydkj-p2p-start');
+  if (start) start.addEventListener('click', ydkjStartHostStream);
+  for (const button of document.querySelectorAll('[data-ydkj-buzzer]')) {
+    button.addEventListener('click', () => {
+      if (window.p2pBridge && window.p2pBridge.sendYdkjBuzzer(button.dataset.ydkjBuzzer)) {
+        ydkjP2PStatus(`Buzzer ${button.dataset.ydkjBuzzer} sent`);
+      }
+    });
+  }
+  for (const button of document.querySelectorAll('[data-ydkj-answer]')) {
+    button.addEventListener('click', () => {
+      if (window.p2pBridge && window.p2pBridge.sendYdkjAnswer(button.dataset.ydkjAnswer)) {
+        ydkjSetAnswerEnabled(false);
+      }
+    });
+  }
+  for (const button of document.querySelectorAll('[data-ydkj-screw]')) {
+    button.addEventListener('click', () => {
+      if (window.p2pBridge && window.p2pBridge.sendYdkjScrew()) {
+        ydkjP2PStatus('Screw action sent');
+      }
+    });
+  }
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindYdkjP2PUI);
+else bindYdkjP2PUI();
 })();

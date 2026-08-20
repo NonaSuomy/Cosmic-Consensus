@@ -39,6 +39,16 @@
               display: none; flex-direction: column; gap: 8px;
               user-select: none; font-family: sans-serif;
           }
+          /* Keep the on-screen keyboard visible above emulator windows and
+             independent of the page's current scroll position. */
+          #win3 {
+              position: fixed;
+              left: 50%;
+              top: 50%;
+              transform: translate(-50%, -50%);
+              z-index: 1000;
+              min-width: 560px;
+          }
           .kb-row { display: flex; justify-content: center; gap: 5px; }
           .key {
               background: #fff; border: none; border-radius: 4px;
@@ -106,7 +116,58 @@
                         <option value="acro">Acrophobia</option>
                         <option value="ydkj">You Don't Know Jack: Net Show</option>
                     </select>
+                    <button id="btn-droodle" type="button" onclick="open_droodle()"
+                            disabled title="Select Get The Picture to enable the Droodle applet.">Droodle</button>
                 </div>
+                <details style="margin-top:8px; max-width:760px;">
+                    <summary>Multiplayer across browsers (manual WebRTC)</summary>
+                <fieldset style="margin-top:4px; max-width:760px;">
+                    <div class="controls-row">
+                        <label for="p2p-role">Network:</label>
+                        <select id="p2p-role">
+                            <option value="local">Local only</option>
+                            <option value="host">Host a room</option>
+                            <option value="guest">Join a host</option>
+                        </select>
+                        <button id="p2p-offer">New host offer</button>
+                        <button id="p2p-answer">Create guest answer</button>
+                        <button id="p2p-apply">Apply host answer</button>
+                        <button id="p2p-copy">Copy code</button>
+                        <button id="p2p-paste">Paste code</button>
+                        <button id="p2p-share-host">Share host link</button>
+                        <button id="p2p-share-answer">Copy answer link</button>
+                        <span id="p2p-status">Local-only network</span>
+                    </div>
+                    <div class="controls-row">
+                        <label for="p2p-remote">Paste remote:</label>
+                        <textarea id="p2p-remote" rows="3" cols="42" spellcheck="false"></textarea>
+                        <label for="p2p-local">Send this:</label>
+                        <textarea id="p2p-local" rows="3" cols="42" spellcheck="false" readonly></textarea>
+                    </div>
+                    <small>Host: New host offer -&gt; send it to a guest. Guest: paste it as remote -&gt; Create guest answer -&gt; send the result back. Host: paste that answer as remote -&gt; Apply host answer. Set the role before starting the emulator.</small>
+                </fieldset>
+                </details>
+                <details style="margin-top:8px; max-width:760px;">
+                    <summary>Optional YDKJ Net Show host / players</summary>
+                <fieldset style="margin-top:4px; max-width:760px;">
+                    <div class="controls-row">
+                        <button id="ydkj-p2p-start">Start host screen stream</button>
+                        <button data-ydkj-buzzer="Q" disabled>Q</button>
+                        <button data-ydkj-buzzer="B" disabled>B</button>
+                        <button data-ydkj-buzzer="P" disabled>P</button>
+                        <button data-ydkj-screw disabled>Screw (S)</button>
+                        <span>Answer:</span>
+                        <button data-ydkj-answer="1" disabled>1</button>
+                        <button data-ydkj-answer="2" disabled>2</button>
+                        <button data-ydkj-answer="3" disabled>3</button>
+                        <button data-ydkj-answer="4" disabled>4</button>
+                        <span id="ydkj-p2p-status">Start a YDKJ emulator, then choose the host stream option.</span>
+                    </div>
+                    <video id="ydkj-remote-video" hidden autoplay muted playsinline
+                           style="display:block; max-width:720px; width:100%; background:#000; margin-top:6px;"></video>
+                    <small>Guests must buzz successfully before their 1–4 answer buttons unlock. Submitting an answer locks them again for the next question.</small>
+                </fieldset>
+                </details>
                 <textarea id="logarea" rows="10" cols="98" style="font-family: monospace; background: inherit; display: none;" readonly></textarea>
                 <!-- Cisco-style server console. Output goes into the log above,
                      so opening the log is how you read replies. Hidden and
@@ -203,6 +264,8 @@
                 var v = Date.now();
                 var files = [
                     ['unzstd.js', null],
+                    ['p2p-bridge.js', 'p2p-bridge-script'],
+                    ['http-server.js', 'http-server-script'],
                     ['gtp-server.js', 'gtp-server-script'],
                     ['acro-server.js', 'acro-server-script'],
                     ['ydkj-server.js', 'ydkj-server-script'],
@@ -383,12 +446,35 @@
             // ensureNetwork(), so they sit on one Ethernet segment and can
             // join each other's games.
             const clients = [];
+            window.__tiny386Clients = clients;
             let clientSeq = 0;
             // Which window the on-screen keyboard types into: the last one
             // whose title bar or screen was clicked.
             let activeClient = null;
 
+            // Canvas elements do not have a native text-editing context, so
+            // browsers do not generate a normal paste event for Ctrl+V there.
+            // Catch the shortcut before the emulator's own key handler sees it
+            // and feed clipboard text through the same scancode path as the
+            // per-client type box and Paste button.
+            document.addEventListener('keydown', async (e) => {
+                if (!(e.ctrlKey || e.metaKey) || String(e.key).toLowerCase() !== 'v') return;
+                const target = e.target;
+                if (target && (target.matches('input, textarea, select') || target.isContentEditable)) return;
+                if (!activeClient || !activeClient.inst ||
+                    typeof activeClient.inst.send_text !== 'function') return;
+                e.preventDefault();
+                e.stopPropagation();
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (text) activeClient.inst.send_text(text);
+                } catch (err) {
+                    conlog('[ui] Ctrl+V clipboard access was blocked; use the client Paste button or type box.');
+                }
+            }, true);
+
             function setActive(c) {
+                window.__tiny386ActiveClient = c;
                 // Drop any held Shift/Ctrl/Alt/Win on the machine we are
                 // leaving, so a latched modifier cannot stick down on a client
                 // the keyboard no longer points at.
@@ -458,7 +544,13 @@
                     const inifile = sel.value;
                     let wasm_name = 'tiny386.wasm';
                     if (inifile == 'linux-amd64.ini') wasm_name = 'tinyamd64.wasm';
+                    // The player field is no longer written into the guest
+                    // registry. The disk image is passed through untouched.
                     c.inst = get_tiny386(c.canvas, wasm_name);
+                    if (inifile === 'win95ns.ini' && window.ydkjP2P &&
+                        typeof window.ydkjP2P.setHostInstance === 'function') {
+                        window.ydkjP2P.setHostInstance(c.canvas, c.inst);
+                    }
                     const o = document.getElementById('logarea');
                     // Every client shares one log pane, so prefix its lines --
                     // otherwise interleaved output from several PCs is unreadable.
@@ -472,6 +564,27 @@
                         if (window.log_autoscroll)
                             o.scrollTop = o.scrollHeight;
                     });
+                    // Boot status -> this window's status bar. Both halves are
+                    // optional on purpose: set_status is absent on a stale
+                    // main.js and uiSetStatus on a stale ui.js, and in either
+                    // case the client still boots exactly as it did before --
+                    // it just shows nothing while it does.
+                    // Looked up per call, not captured, so Reload UI swapping
+                    // in a new uiSetStatus takes effect on a boot already
+                    // under way.
+                    if (typeof c.inst.set_status === 'function') {
+                        c.inst.set_status((st) => {
+                            if (typeof window.uiSetStatus === 'function')
+                                window.uiSetStatus(c, st);
+                        });
+                    } else {
+                        conlog('[ui] stale main.js (no set_status) -- no boot status bar. Hard-refresh.');
+                    }
+                    // Something visible before the first status arrives: the
+                    // wasm fetch can take a moment on a cold cache, and a Start
+                    // button that appears to do nothing is the bug being fixed.
+                    if (typeof window.uiSetStatus === 'function')
+                        window.uiSetStatus(c, { phase: 'boot', text: 'Starting ' + inifile });
                     c.inst.start(inifile);
                     setActive(c);
                     clientStatus();
@@ -523,10 +636,18 @@
             function toggle_keyboard()
             {
                 let kbwin = document.getElementById('win3');
-                if (kbwin.style.display === 'none')
+                const kb = document.getElementById('virtual-kb');
+                // Use computed visibility as well as the inline style.  The
+                // emulator/window code can change display after page load,
+                // which otherwise makes the first button click do nothing.
+                const showing = window.getComputedStyle(kbwin).display === 'none';
+                if (showing) {
                     kbwin.style.display = 'block';
-                else
+                    kb.style.display = 'flex';
+                } else {
                     kbwin.style.display = 'none';
+                    kb.style.display = 'none';
+                }
             }
 
             function toggle_about()
@@ -589,6 +710,7 @@
             // claim a server that was not actually selected.
             {
                 const sel = document.getElementById('gameselect');
+                const droodle = document.getElementById('btn-droodle');
                 const LABEL = {
                     cosmic: 'Cosmic Consensus',
                     gtp: 'Get The Picture',
@@ -604,7 +726,7 @@
                     ydkj: 'ydkjHandleGameConnection',
                 };
                 const NOTE = {
-                    gtp: 'Lobby + record only: everything past RS is logged, not answered.',
+                    gtp: 'Lobby + room entry work; the game segments are logged, not answered.',
                     acro: 'Ported from Acrobot; never run against a real client yet.',
                     ydkj: 'HTTP only -- game-port connections are refused by design.',
                 };
@@ -617,7 +739,24 @@
                     if (window.log_autoscroll) o.scrollTop = o.scrollHeight;
                 }
 
-                window.onActiveGameProfileChange = (profile) => { sel.value = profile; };
+                function syncDroodleButton() {
+                    const enabled = sel.value === 'gtp';
+                    droodle.disabled = !enabled;
+                    droodle.title = enabled
+                        ? 'Open the Droodle drawing applet for Get The Picture.'
+                        : 'Select Get The Picture to enable the Droodle applet.';
+                }
+
+                window.open_droodle = () => {
+                    if (sel.value !== 'gtp') return;
+                    window.open('droodle-applet.html', 'droodle-applet',
+                        'popup,width=960,height=760,resizable=yes,scrollbars=yes');
+                };
+
+                window.onActiveGameProfileChange = (profile) => {
+                    sel.value = profile;
+                    syncDroodleButton();
+                };
 
                 sel.addEventListener('change', () => {
                     const want = sel.value;
@@ -633,6 +772,7 @@
                         return;
                     }
                     window.setActiveGameProfile(want);
+                    syncDroodleButton();
                     selOut('[game] New connections -> ' + LABEL[want] + '.');
                     if (NOTE[want]) selOut('[game] ' + NOTE[want]);
                     selOut('[game] Games already in progress keep the server they started on.');
@@ -641,6 +781,7 @@
                 // Reflect whatever the server already has -- a reload of
                 // cosmic-server.js resets it to Cosmic, and the box has to say so.
                 if (window.getActiveGameProfile) sel.value = window.getActiveGameProfile();
+                syncDroodleButton();
             }
 
             {
