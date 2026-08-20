@@ -25,6 +25,36 @@
                 max-width: 720px;
                 margin: 6px 0;
             }
+            .quick-start-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                flex-wrap: wrap;
+                max-width: 720px;
+                margin: 6px 0;
+            }
+            .quick-start-row button {
+                font-weight: bold;
+                min-width: 150px;
+            }
+            .advanced-toolbar {
+                max-width: 720px;
+                margin-top: 8px;
+            }
+            .advanced-toolbar > summary,
+            .client-controls > summary {
+                cursor: pointer;
+                font-weight: bold;
+                padding: 4px 0;
+            }
+            .control-section {
+                margin: 6px 0;
+                padding: 5px 8px 7px;
+            }
+            .control-section legend {
+                padding: 0 4px;
+                font-weight: bold;
+            }
             .window {
                 display: inline-block;
                 -webkit-user-select: none;
@@ -74,9 +104,20 @@
                 <div class="title-bar-text">beZerk Revived / Tiny386 / WebAssembly</div>
             </div>
             <div class="window-body">
+                <div class="quick-start-row">
+                    <button id="btn-quick-start" onclick="start_default_client()"
+                            title="Create and boot one game client with the default settings.">Start 1 Client</button>
+                    <span>Simple mode</span>
+                    <span id="clientstatus"></span>
+                </div>
+                <details class="advanced-toolbar">
+                    <summary>Advanced controls and multiplayer</summary>
                 <div class="controls-row">
+                    <input type="checkbox" id="enable-multiclient" onchange="toggle_multiclient()">
+                    <label for="enable-multiclient" title="Enable this before creating more than one emulated PC.">Enable multiple clients</label>
                     <label for="clientcount">Clients:</label>
                     <input type="number" id="clientcount" value="1" min="1" max="100"
+                           disabled
                            style="width: 60px;"
                            title="How many emulated PCs to open. They share one virtual network, so they can all join the same game. Anything past a handful will be very slow -- each is a full 386 with its own RAM.">
                     <button onclick="spawn_clients()"
@@ -88,10 +129,10 @@
                          That is an adjacent-sibling rule, so the input must sit
                          BEFORE the label as its sibling -- nesting it inside the
                          label matches nothing and the box never appears. -->
-                    <input type="checkbox" id="autostart">
+                    <input type="checkbox" id="autostart" checked>
                     <label for="autostart"
                            title="Boot each PC as soon as its window is created, instead of waiting for you to press Start on each one. They share one disk download, so starting several together is no slower than starting one.">Auto-start</label>
-                    <span id="clientstatus" style="margin-left: 8px;"></span>
+                    <span style="margin-left: 8px;">Session setup</span>
                 </div>
                 <div class="controls-row">
                     <button id="btn-log" onclick="toggle_log()"
@@ -100,15 +141,15 @@
                             title="When off, the log stops jumping to the newest line so you can scroll back while the game runs.">Autoscroll: On</button>
                     <button id="btn-clear-log" onclick="clear_log()"
                             title="Empty the log panel. Only clears what is on screen -- the servers keep logging, and anything already scrolled past is gone for good.">Clear Log</button>
-                    <button onclick="toggle_keyboard()"
-                            title="Show or hide the on-screen keyboard. Keys go to the last client window you clicked.">Keyboard</button>
                     <button id="btn-reload-server" onclick="reload_server()"
-                            title="Re-load BOTH game servers (Cosmic Consensus and Get The Picture) without restarting the emulators. Keeps whichever server the dropdown has selected. Applies to new connections; exit to the room list and rejoin to pick it up.">Reload Server</button>
+                            title="Reload ALL game servers and the shared HTTP server without restarting the emulators. Keeps whichever server the dropdown has selected. Applies to new connections; exit to the room list and rejoin to pick it up.">Reload Servers</button>
                     <button id="btn-reload-ui" onclick="reload_ui()"
                             title="Re-fetch ui.js and rebuild every client window's controls, WITHOUT restarting the emulators. The live canvas is moved into the new markup, so the VMs keep running. Use this after editing ui.js; changes to index.html itself still need a page refresh.">Reload UI</button>
                     <button onclick="toggle_about()"
                             title="Credits for beZerk Revived and Tiny386.">About</button>
-                    <label style="margin-left: 8px;" for="gameselect">Server:</label>
+                </div>
+                <div class="controls-row">
+                    <label for="gameselect">Server:</label>
                     <select id="gameselect"
                             title="Which game server answers NEW connections. Games already running keep the server they started on, so switch from the title screen. Same as the console's GAME command.">
                         <option value="cosmic">Cosmic Consensus</option>
@@ -128,25 +169,25 @@
                 <fieldset style="margin-top:4px; max-width:760px;">
                     <div class="controls-row">
                         <label for="p2p-role">Network:</label>
-                        <select id="p2p-role">
+                        <select id="p2p-role" title="Choose Local only for one browser, Host to create a room, or Guest to join someone else's room.">
                             <option value="local">Local only</option>
                             <option value="host">Host a room</option>
                             <option value="guest">Join a host</option>
                         </select>
-                        <button id="p2p-offer">New host offer</button>
-                        <button id="p2p-answer">Create guest answer</button>
-                        <button id="p2p-apply">Apply host answer</button>
-                        <button id="p2p-copy">Copy code</button>
-                        <button id="p2p-paste">Paste code</button>
-                        <button id="p2p-share-host">Share host link</button>
-                        <button id="p2p-share-answer">Copy answer link</button>
+                        <button id="p2p-offer" title="Create a host offer code to send to the guest.">New host offer</button>
+                        <button id="p2p-answer" title="Create the guest answer after pasting the host offer.">Create guest answer</button>
+                        <button id="p2p-apply" title="Apply the guest answer pasted into the remote box.">Apply host answer</button>
+                        <button id="p2p-copy" title="Copy the current signaling code to the clipboard.">Copy code</button>
+                        <button id="p2p-paste" title="Paste a signaling code from the clipboard into the remote box.">Paste code</button>
+                        <button id="p2p-share-host" title="Create a shareable link containing the host offer.">Share host link</button>
+                        <button id="p2p-share-answer" title="Copy a link containing the guest answer for the host.">Copy answer link</button>
                         <span id="p2p-status">Local-only network</span>
                     </div>
                     <div class="controls-row">
                         <label for="p2p-remote">Paste remote:</label>
-                        <textarea id="p2p-remote" rows="3" cols="42" spellcheck="false"></textarea>
+                        <textarea id="p2p-remote" rows="3" cols="42" spellcheck="false" title="Paste the other peer's signaling code here."></textarea>
                         <label for="p2p-local">Send this:</label>
-                        <textarea id="p2p-local" rows="3" cols="42" spellcheck="false" readonly></textarea>
+                        <textarea id="p2p-local" rows="3" cols="42" spellcheck="false" readonly title="Your signaling code to copy and send to the other peer."></textarea>
                     </div>
                     <small>Host: New host offer -&gt; send it to a guest. Guest: paste it as remote -&gt; Create guest answer -&gt; send the result back. Host: paste that answer as remote -&gt; Apply host answer. Set the role before starting the emulator.</small>
                 </fieldset>
@@ -155,16 +196,16 @@
                     <summary>Optional YDKJ Net Show host / players</summary>
                 <fieldset style="margin-top:4px; max-width:760px;">
                     <div class="controls-row">
-                        <button id="ydkj-p2p-start">Start host screen stream</button>
-                        <button data-ydkj-buzzer="Q" disabled>Q</button>
-                        <button data-ydkj-buzzer="B" disabled>B</button>
-                        <button data-ydkj-buzzer="P" disabled>P</button>
-                        <button data-ydkj-screw disabled>Screw (S)</button>
+                        <button id="ydkj-p2p-start" title="Start sharing the host YDKJ screen and audio with connected players.">Start host screen stream</button>
+                        <button data-ydkj-buzzer="Q" disabled title="Send the Q buzzer to the YDKJ host.">Q</button>
+                        <button data-ydkj-buzzer="B" disabled title="Send the B buzzer to the YDKJ host.">B</button>
+                        <button data-ydkj-buzzer="P" disabled title="Send the P buzzer to the YDKJ host.">P</button>
+                        <button data-ydkj-screw disabled title="Send the Screw action to the YDKJ host.">Screw (S)</button>
                         <span>Answer:</span>
-                        <button data-ydkj-answer="1" disabled>1</button>
-                        <button data-ydkj-answer="2" disabled>2</button>
-                        <button data-ydkj-answer="3" disabled>3</button>
-                        <button data-ydkj-answer="4" disabled>4</button>
+                        <button data-ydkj-answer="1" disabled title="Send answer 1 after buzzing in.">1</button>
+                        <button data-ydkj-answer="2" disabled title="Send answer 2 after buzzing in.">2</button>
+                        <button data-ydkj-answer="3" disabled title="Send answer 3 after buzzing in.">3</button>
+                        <button data-ydkj-answer="4" disabled title="Send answer 4 after buzzing in.">4</button>
                         <span id="ydkj-p2p-status">Start a YDKJ emulator, then choose the host stream option.</span>
                     </div>
                     <video id="ydkj-remote-video" hidden autoplay muted playsinline
@@ -183,24 +224,29 @@
                            style="font-family: monospace; flex: 1 1 auto; min-width: 0;"
                            title="Server console. Enter runs a command, Tab completes, ? lists what is valid here, Up/Down walks history. Abbreviations work: STA = STATUS. Output appears in the log above.">
                 </div>
+                </details>
             </div>
         </div>
         <!-- Client windows are appended here by spawn_clients(). -->
         <div id="clients"></div>
         <div class="window" id="win4" style="display: none">
             <div class="title-bar" id="tit4">
-                <div class="title-bar-text">About beZerk Revived</div>
+                <div class="title-bar-text">About beZerk Revived Emulator</div>
                 <div class="title-bar-controls">
                     <button aria-label="Close" onclick="toggle_about()" title="Close"></button>
                 </div>
             </div>
             <div class="window-body" id="about-body">
-                <p><strong>beZerk Revived</strong></p>
+                <p><strong>beZerk Revived Emulator</strong></p>
                 <ul>
                     <li>NonaSuomy</li>
                     <li>GruffTech</li>
                     <li>SecondSight</li>
                 </ul>
+                <p>
+                    <a href="http://bezerk.uk" target="_blank" rel="noopener">beZerk Revived</a><br>
+                    <a href="https://discord.gg/MVEsDC2UXy" target="_blank" rel="noopener">Join the Discord</a>
+                </p>
                 <hr>
                 <p><strong>Tiny386</strong> &mdash; 386 PC emulator, compiled to WebAssembly</p>
                 <ul>
@@ -405,7 +451,13 @@
                 try {
                     ok = await window.reloadServerScript('ui.js', 'ui-script', 'uiRebuildClient');
                     if (ok) {
-                        const api = { stopClient: stop_client, fullscreenClient: fullscreenClient, conlog: conlog };
+                        // Remove the pre-client-controls Keyboard button if
+                        // this page was opened before the button was moved.
+                        // Reload UI normally reloads ui.js only, so legacy
+                        // index.html toolbar markup can otherwise linger.
+                        const legacyKeyboard = document.querySelector('#win0 button[onclick="toggle_keyboard()"]');
+                        if (legacyKeyboard) legacyKeyboard.remove();
+                        const api = { stopClient: stop_client, fullscreenClient: fullscreenClient, setActive: setActive, conlog: conlog };
                         let n = 0;
                         for (const c of clients) if (window.uiRebuildClient(c, api, wireClientChrome)) n++;
                         conlog('[ui] rebuilt ' + n + ' client window(s); emulators untouched');
@@ -498,9 +550,31 @@
                     : '';
             }
 
+            function toggle_multiclient() {
+                const enabled = document.getElementById('enable-multiclient').checked;
+                const count = document.getElementById('clientcount');
+                count.disabled = !enabled;
+                if (!enabled) count.value = '1';
+            }
+
+            function start_default_client() {
+                if (clients.length) {
+                    setActive(clients[clients.length - 1]);
+                    conlog('[ui] A client is already open; use Advanced controls to create more.');
+                    return;
+                }
+                const c = spawn_one_client();
+                c.start();
+            }
+
             function spawn_clients() {
-                const n = Math.max(1, Math.min(100, parseInt(
+                const multi = document.getElementById('enable-multiclient').checked;
+                const requested = Math.max(1, Math.min(100, parseInt(
                     document.getElementById('clientcount').value, 10) || 1));
+                const n = multi ? requested : 1;
+                if (!multi && requested > 1) {
+                    conlog('[ui] Enable multiple clients before creating more than one.');
+                }
                 const auto = document.getElementById('autostart').checked;
                 const made = [];
                 for (let i = 0; i < n; i++) made.push(spawn_one_client());
@@ -596,6 +670,7 @@
                 const uiApi = {
                     stopClient: stop_client,
                     fullscreenClient: fullscreenClient,
+                    setActive: setActive,
                     conlog: conlog,
                 };
                 window.uiWireControls(c, win, uiApi);
@@ -775,7 +850,7 @@
                         return;
                     }
                     if (!window.setActiveGameProfile) {
-                        selOut('[game] Server code is too old for the selector -- press Reload Server.');
+                        selOut('[game] Server code is too old for the selector -- press Reload Servers.');
                         sel.value = 'cosmic';
                         return;
                     }
@@ -805,7 +880,7 @@
                 }
 
                 function con() {
-                    // Looked up per keystroke, never cached: Reload Server
+                    // Looked up per keystroke, never cached: Reload Servers
                     // republishes window.cosmicConsole, and a cached reference
                     // would keep driving the old module.
                     return window.cosmicConsole;

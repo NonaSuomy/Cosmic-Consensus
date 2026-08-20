@@ -32,21 +32,36 @@ function uiClientMarkup(id) {
 '</div>' +
 '<div class="window-body">' +
   '<center><canvas width="720" height="480" style="background-color:#000000;"></canvas></center>' +
-  '<div class="controls-row">' +
-    '<select title="Which game disc this PC boots into. Pick before pressing Start.">' +
-      '<option value="win95all.ini">beZerk Revived</option>' +
-      '<option value="win95cc.ini">Cosmic Consensus</option>' +
-      '<option value="win95a.ini">Acrophobia</option>' +
-      '<option value="win95gtp.ini">Get The Picture</option>' +
-      '<option value="win95ns.ini">Net Show</option>' +
-    '</select>' +
-    '<button data-act="start" title="Boot this PC with the selected game.">Start</button>' +
-    '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +
+  '<details class="client-controls">' +
+    '<summary>Client controls</summary>' +
+    '<fieldset class="control-section">' +
+      '<legend>Power and game</legend>' +
+      '<div class="controls-row">' +
+        '<select title="Which game disc this PC boots into. Pick before pressing Start.">' +
+          '<option value="win95all.ini">beZerk Revived</option>' +
+          '<option value="win95cc.ini">Cosmic Consensus</option>' +
+          '<option value="win95a.ini">Acrophobia</option>' +
+          '<option value="win95gtp.ini">Get The Picture</option>' +
+          '<option value="win95ns.ini">Net Show</option>' +
+        '</select>' +
+        '<button data-act="start" title="Boot this PC with the selected game.">Start</button>' +
+        '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +
+      '</div>' +
+    '</fieldset>' +
+    '<fieldset class="control-section">' +
+      '<legend>Snapshots</legend>' +
+      '<div class="controls-row">' +
         '<button data-act="save" title="Snapshot this PC: CPU, RAM, devices and disks. Held in memory only -- it does not survive closing the tab.">Save State</button>' +
         '<button data-act="load" title="Put the last snapshot back. The VM keeps running throughout; it simply finds itself where it was.">Load State</button>' +
         '<button data-act="savefile" title="Write the snapshot to a file you can keep. Roughly 220 MB -- guest RAM plus both disk images -- so it takes a moment. Survives closing the browser.">Save to File</button>' +
         '<button data-act="loadfile" title="Load a snapshot file saved earlier. The VM must be started first; the file replaces its state.">Load from File</button>' +
         '<input type="file" data-act="loadfileinput" accept=".t386,.bin" style="display:none;">' +
+      '</div>' +
+    '</fieldset>' +
+    '<fieldset class="control-section">' +
+      '<legend>Keyboard and mouse</legend>' +
+      '<div class="controls-row">' +
+    '<button data-act="keyboard" title="Show or hide the on-screen keyboard for this client.">Keyboard</button>' +
     '<button data-act="grab" title="Lock the mouse to this screen, so movement is delivered to the guest instead of moving the host cursor. Ctrl+Alt+G toggles it from the keyboard; Esc releases it. Not available on iOS.">Grab</button>' +
     '<button data-act="full" title="Expand this screen to fill the display. Press Esc to exit.">Fullscreen</button>' +
     '<button data-act="cad" title="Send Ctrl+Alt+Del to this PC.">Ctrl+Alt+Del</button>' +
@@ -61,7 +76,9 @@ function uiClientMarkup(id) {
     '<button data-act="lmb" title="Send a left-click to this PC, wherever the guest pointer currently is. Useful on touch devices, where there is no real mouse button.">Left-Click</button>' +
     '<button data-act="dblclk" title="Send a left double-click to this PC, wherever the guest pointer currently is. The two clicks go out back to back, well inside the guest\'s double-click interval.">Double-Click</button>' +
     '<button data-act="rmb" title="Send a right-click to this PC.">Right-Click</button>' +
-  '</div>' +
+      '</div>' +
+    '</fieldset>' +
+  '</details>' +
   // Its own block under the buttons rather than wedged
   // between two of them, so it reads as a caption for the
   // whole row and stops shoving the buttons around when the
@@ -146,6 +163,10 @@ function uiWireControls(c, win, api) {
     win.querySelector('[data-act="start"]').addEventListener('click', c.start);
 
     win.querySelector('[data-act="stop"]').addEventListener('click', () => api.stopClient(c));
+    win.querySelector('[data-act="keyboard"]').addEventListener('click', () => {
+        if (api.setActive) api.setActive(c);
+        if (typeof window.toggle_keyboard === 'function') window.toggle_keyboard();
+    });
     // One snapshot per client, held in memory. Deliberately not persisted:
     // see the note on save_state in main.js -- surviving a page reload needs
     // the handles reconstructed too, which is a separate job.

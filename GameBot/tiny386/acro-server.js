@@ -871,15 +871,14 @@ async function acroRunFaceoff(room, alive) {
         room.faceoffAnswers.set(name, { acro: 'No answer was given...', timeMs: 0 });
       }
     }
-    for (const recipient of room.humans()) {
-      await recipient.priv('start_list answer');
-      for (let i = 0; i < room.faceoffPlayers.length; i++) {
-        const player = room.faceoffPlayers[i];
-        const token = room.protocolName(recipient, player);
-        await recipient.priv(`list_item answer ${i} ${acroQuote(token)} ${acroQuote(room.faceoffAnswers.get(player).acro)}`);
-      }
-      await recipient.priv('end_list answer');
+    // The original Acrobot sends faceoff lists to the room channel. The
+    // executable does not reliably consume these as private messages.
+    await room.broadcast('start_list answer');
+    for (let i = 0; i < room.faceoffPlayers.length; i++) {
+      const player = room.faceoffPlayers[i];
+      await room.broadcast(`list_item answer ${i} ${acroQuote(player)} ${acroQuote(room.faceoffAnswers.get(player).acro)}`);
     }
+    await room.broadcast('end_list answer');
     room.phase = 'faceoff_vote';
     for (const c of room.humans()) {
       if (!room.faceoffPlayers.includes(room.gameName(c))) {
@@ -903,26 +902,20 @@ async function acroRunFaceoff(room, alive) {
     }
     for (const name of room.faceoffPlayers) room.faceoffTotals.set(name, room.faceoffTotals.get(name) + counts.get(name));
 
-    for (const recipient of room.humans()) {
-      await recipient.priv(`start_face_scores ${r}`);
-      await recipient.priv('start_list vote_count');
-      for (let i = 0; i < room.faceoffPlayers.length; i++) {
-        const player = room.faceoffPlayers[i];
-        const token = room.protocolName(recipient, player);
-        await recipient.priv(`list_item vote_count ${i} ${acroQuote(token)} ${counts.get(player)}`);
-      }
-      await recipient.priv('end_list vote_count');
+    await room.broadcast(`start_face_scores ${r}`);
+    await room.broadcast('start_list vote_count');
+    for (let i = 0; i < room.faceoffPlayers.length; i++) {
+      const player = room.faceoffPlayers[i];
+      await room.broadcast(`list_item vote_count ${i} ${acroQuote(player)} ${counts.get(player)}`);
     }
+    await room.broadcast('end_list vote_count');
     await acroSleep(1000);
-    for (const recipient of room.humans()) {
-      await recipient.priv('start_list faceoff_score');
-      for (let i = 0; i < room.faceoffPlayers.length; i++) {
-        const player = room.faceoffPlayers[i];
-        const token = room.protocolName(recipient, player);
-        await recipient.priv(`list_item faceoff_score ${i} ${acroQuote(token)} ${room.faceoffTotals.get(player)}`);
-      }
-      await recipient.priv('end_list faceoff_score');
+    await room.broadcast('start_list faceoff_score');
+    for (let i = 0; i < room.faceoffPlayers.length; i++) {
+      const player = room.faceoffPlayers[i];
+      await room.broadcast(`list_item faceoff_score ${i} ${acroQuote(player)} ${room.faceoffTotals.get(player)}`);
     }
+    await room.broadcast('end_list faceoff_score');
     await acroSleep(20000);
   }
 
@@ -930,15 +923,12 @@ async function acroRunFaceoff(room, alive) {
   const finalWinner = [...room.faceoffTotals.entries()].sort((a, b) => b[1] - a[1])[0][0];
   await room.broadcast('start_final_scores 21250');
   await acroSleep(28000);
-  for (const recipient of room.humans()) {
-    await recipient.priv('start_list score');
-    let i = 0;
-    for (const [player] of acroScoreEntries(room)) {
-      const token = room.protocolName(recipient, player);
-      await recipient.priv(`list_item score ${i++} ${acroQuote(token)} 0 0`);
-    }
-    await recipient.priv('end_list score');
+  await room.broadcast('start_list score');
+  let i = 0;
+  for (const [player] of acroScoreEntries(room)) {
+    await room.broadcast(`list_item score ${i++} ${acroQuote(player)} 0 0`);
   }
+  await room.broadcast('end_list score');
   await room.broadcast(`chat ${acroQuote(`${finalWinner} wins the face-off!`)}`);
   // Let the final faceoff/results screen remain visible before resetting the
   // scores and starting the next ordinary game.
