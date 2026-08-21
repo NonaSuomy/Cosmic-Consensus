@@ -186,6 +186,8 @@
                     <div class="controls-row">
                         <label for="p2p-remote">Paste remote:</label>
                         <textarea id="p2p-remote" rows="3" cols="42" spellcheck="false" title="Paste the other peer's signaling code here."></textarea>
+                    </div>
+                    <div class="controls-row">
                         <label for="p2p-local">Send this:</label>
                         <textarea id="p2p-local" rows="3" cols="42" spellcheck="false" readonly title="Your signaling code to copy and send to the other peer."></textarea>
                     </div>
@@ -591,7 +593,14 @@
             }
 
             function spawn_one_client() {
-                const id = ++clientSeq;
+                // Reuse the lowest free client number after a window is
+                // closed. The old monotonic counter made repeatedly opening
+                // and closing clients turn Client 1 into Client 27 even
+                // though only a few windows were still present.
+                const used = new Set(clients.map((client) => client.id));
+                let id = 1;
+                while (used.has(id)) id++;
+                clientSeq = Math.max(clientSeq, id);
                 const c = { id, win: null, canvas: null, inst: null };
 
                 const win = document.createElement('div');

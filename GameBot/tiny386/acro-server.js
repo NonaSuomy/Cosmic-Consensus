@@ -617,7 +617,12 @@ class AcroClient {
       }
       const playerName = room.gameName(this);
       const answer = { acro: answerText, timeMs: parseInt(args[2], 10) || 0, client: this };
-      if (room.phase === 'faceoff_comp' && room.faceoffPlayers.includes(playerName)) {
+      // During the original overlapping face-off flow, the finalists are
+      // already composing the next acronym while the room is technically in
+      // the previous round's voting phase. Keep accepting their composition
+      // answers during both phases.
+      if ((room.phase === 'faceoff_comp' || room.phase === 'faceoff_vote') &&
+          room.faceoffPlayers.includes(playerName)) {
         room.faceoffAnswers.set(playerName, answer);
       } else if (room.phase === 'comp' && !room.answers.has(playerName)) {
         room.answers.set(playerName, answer);
@@ -843,48 +848,73 @@ async function acroRunFaceoff(room, alive) {
   }
   await acroSleep(20000);
 
+  // Match Acrobot's overlapping face-off cadence: finalists compose the next
+  // acronym while the other players vote on the answers just submitted.
+  let acronym = randomAcronym(3);
+  room.faceoffAnswers.clear();
+  room.faceoffVotes.clear();
+  room.phase = 'faceoff_comp';
+  for (const player of room.faceoffPlayers) {
+    if (room.botScores.has(player)) {
+      room.faceoffAnswers.set(player, { acro: acroBotAnswer(acronym, 1), timeMs: 30000 });
+    }
+  }
+  for (const c of room.humans()) {
+    if (room.faceoffPlayers.includes(room.gameName(c))) {
+      await c.priv(`start_faceoff_comp_round ${ACRO_LEAD_MS} ${ACRO_FACEOFF_COMP_MS} 1 ${acroQuote(acronym)}`);
+    } else {
+      await c.priv('start_rules faceoff_voter 16250');
+    }
+  }
+  await acroSleep(38000);
+
   for (let r = 1; r <= ACRO_FACEOFF_ROUNDS && alive(); r++) {
-    // The original Acrobot uses 3-, 4-, and 5-letter faceoff acronyms.
-    const acronym = randomAcronym(r + 2);
-    room.faceoffAnswers.clear();
-    room.faceoffVotes.clear();
-    room.phase = 'faceoff_comp';
-    for (const player of room.faceoffPlayers) {
-      if (room.botScores.has(player)) {
-        room.faceoffAnswers.set(player, { acro: acroBotAnswer(acronym, r), timeMs: 30000 });
-      }
-    }
-    for (const c of room.humans()) {
-      if (room.faceoffPlayers.includes(room.gameName(c))) {
-        await c.priv(`start_faceoff_comp_round ${ACRO_LEAD_MS} ${ACRO_FACEOFF_COMP_MS} ${r} ${acroQuote(acronym)}`);
-      } else {
-        await c.priv('start_rules faceoff_voter 16250');
-      }
-    }
-    // Acrobot leaves the composition screen up for 38 seconds. The client
-    // ignores the answer list if it arrives after only the advertised
-    // 22.5-second lead+duration window.
-    await acroSleep(38000);
-    if (!alive()) return;
+    const answers = new Map(room.faceoffAnswers);
     for (const name of room.faceoffPlayers) {
-      if (!room.faceoffAnswers.has(name)) {
-        room.faceoffAnswers.set(name, { acro: 'No answer was given...', timeMs: 0 });
+      if (!answers.has(name)) answers.set(name, { acro: 'No answer was given...', timeMs: 0 });
+    }
+    const voteAcronym = acronym;
+    room.faceoffVotes.clear();
+
+    if (r < ACRO_FACEOFF_ROUNDS) {
+      // Start the next composition before showing this round's answers.
+      acronym = randomAcronym(r + 3);
+      room.faceoffAnswers.clear();
+      room.phase = 'faceoff_comp';
+      for (const player of room.faceoffPlayers) {
+        if (room.botScores.has(player)) {
+          room.faceoffAnswers.set(player, { acro: acroBotAnswer(acronym, r + 1), timeMs: 30000 });
+        }
+      }
+      for (const c of room.humans()) {
+        if (room.faceoffPlayers.includes(room.gameName(c))) {
+          await c.priv(`start_faceoff_comp_round ${ACRO_LEAD_MS} ${ACRO_FACEOFF_COMP_MS} ${r + 1} ${acroQuote(acronym)}`);
+        }
+      }
+    } else {
+      for (const c of room.humans()) {
+        if (room.faceoffPlayers.includes(room.gameName(c))) {
+          await c.priv(`chat ${acroQuote("And that's it! The results will be revealed in just a moment.")}`);
+        }
       }
     }
-    // The original Acrobot sends faceoff lists to the room channel. The
-    // executable does not reliably consume these as private messages.
+
+    // Face-off answer lists are room broadcasts; private lists are ignored by
+    // some clients. Voters now receive this round's choices immediately.
     await room.broadcast('start_list answer');
     for (let i = 0; i < room.faceoffPlayers.length; i++) {
       const player = room.faceoffPlayers[i];
-      await room.broadcast(`list_item answer ${i} ${acroQuote(player)} ${acroQuote(room.faceoffAnswers.get(player).acro)}`);
+      await room.broadcast(`list_item answer ${i} ${acroQuote(player)} ${acroQuote(answers.get(player).acro)}`);
     }
     await room.broadcast('end_list answer');
     room.phase = 'faceoff_vote';
     for (const c of room.humans()) {
       if (!room.faceoffPlayers.includes(room.gameName(c))) {
-        await c.priv(`start_faceoff_voting_round ${ACRO_LEAD_MS} ${ACRO_FACEOFF_VOTE_MS} ${r} ${acroQuote(acronym)}`);
+        await c.priv(`start_faceoff_voting_round ${ACRO_LEAD_MS} ${ACRO_FACEOFF_VOTE_MS} ${r} ${acroQuote(voteAcronym)}`);
       }
     }
+
+    // Bots vote automatically; human voters get the full vote window.
     const choices = [...room.faceoffPlayers];
     let botIndex = 0;
     for (const bot of room.botScores.keys()) {
@@ -900,7 +930,9 @@ async function acroRunFaceoff(room, alive) {
     for (const [, vote] of room.faceoffVotes) {
       if (counts.has(vote.target)) counts.set(vote.target, counts.get(vote.target) + 1);
     }
-    for (const name of room.faceoffPlayers) room.faceoffTotals.set(name, room.faceoffTotals.get(name) + counts.get(name));
+    for (const name of room.faceoffPlayers) {
+      room.faceoffTotals.set(name, room.faceoffTotals.get(name) + counts.get(name));
+    }
 
     await room.broadcast(`start_face_scores ${r}`);
     await room.broadcast('start_list vote_count');
