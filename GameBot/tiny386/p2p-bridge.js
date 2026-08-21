@@ -26,7 +26,18 @@
   let txFrames = 0;
   let rxFrames = 0;
 
-  function status(s) { onStatus(String(s)); }
+  // The transport is shared by every game profile, but the control channel
+  // messages below are meaningful only for YDKJ Net Show.
+  function ydkjSelected() {
+    const selector = document.getElementById('gameselect');
+    return !selector || selector.value === 'ydkj';
+  }
+
+  function status(s) {
+    const text = String(s);
+    if (/^YDKJ\b/i.test(text) && !ydkjSelected()) return;
+    onStatus(text);
+  }
 
   function wireChannel(channel) {
     channel.binaryType = 'arraybuffer';

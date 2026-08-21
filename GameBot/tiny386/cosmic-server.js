@@ -4048,9 +4048,9 @@ class GameClient {
     }
 
     // SP + SAS are what animate the pyramid unloading, and they have to reach
-    // the client BEFORE the next NGS builds a new one -- but SP also tears the
-    // end-game screen down to begin a segment, so sending it straight after
-    // EGS cut the final stats off after a beat.
+    // the client BEFORE the next NGS builds a new one. Let startSegment() own
+    // this transition so the packets are emitted in the same sequence as a
+    // normal segment start.
     //
     // EGS states its own lifetime in its trailer: "EGS S 0 781184 745184
     // 30000 0" is 30 s visible plus the 6 s dwell (reveal_at - elapsed -
@@ -4064,22 +4064,11 @@ class GameClient {
     const egsHoldMs = ENDGAME_EGS_VISIBLE_MS + ENDGAME_EGS_DWELL_MS;
     await sleep(egsHoldMs);
     if (!this.activeSession(sessionGeneration)) return;
-    await this.sendLock.withLock(async () => {
-      if (!this.activeSession(sessionGeneration)) return;
-      await this.botPriv(this.clientIrcName, 'SP S 0 0 0 0 0');
-      await this.botPriv(this.clientIrcName, 'SAS S 0 0 0 0 0');
-    });
 
-    // Loop back into a brand new pyramid segment. The reference keeps going
-    // (SP/SAS/NGS/RU/ADLB...) rather than stopping at the end-game screen --
-    // this server used to just stop here, so the pyramid never came down and
-    // no second game ever started. The remainder of the original wait, so the
-    // total EGS -> NGS gap is unchanged.
-    await sleep(Math.max(0, ENDGAME_EGS_WAIT_SECONDS * 1000 - egsHoldMs));
-    if (!this.activeSession(sessionGeneration)) return;
-    await sleep(2000); // flow-pre
-    if (!this.activeSession(sessionGeneration)) return;
-    await this.startSegment(true, true);
+    // Loop back into a brand new pyramid segment. startSegment() sends the
+    // SP/SAS/NGS transition itself; sending SP/SAS here and then asking it to
+    // skip them left the client with an unreliable pyramid teardown.
+    await this.startSegment(true, false);
   }
 
   // ── segment start/end ──────────────────────────────────────────────────
@@ -4151,9 +4140,8 @@ class GameClient {
       if (!this.activeSession(sessionGeneration)) return;
       await sleep(2000);
       if (!this.activeSession(sessionGeneration)) return;
-      // skipSpSas: the post-EGS caller already sent both, once the end-game
-      // screen had had its full run. The sleeps stay either way so NGS still
-      // lands at the same point on the clock.
+      // The post-EGS caller deliberately does not pre-send SP/SAS; this method
+      // owns the complete new-segment transition.
       if (!skipSpSas) {
         await this.sendLock.withLock(() => this.botPriv(this.clientIrcName, 'SP S 0 0 0 0 0'));
       }

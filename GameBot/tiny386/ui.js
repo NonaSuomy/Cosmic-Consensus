@@ -39,10 +39,12 @@ function uiClientMarkup(id) {
       '<div class="controls-row">' +
         '<select title="Which game disc this PC boots into. Pick before pressing Start.">' +
           '<option value="win95all.ini">beZerk Revived</option>' +
-          '<option value="win95cc.ini">Cosmic Consensus</option>' +
-          '<option value="win95a.ini">Acrophobia</option>' +
-          '<option value="win95gtp.ini">Get The Picture</option>' +
-          '<option value="win95ns.ini">Net Show</option>' +
+          // Other emulator choices are intentionally hidden for now. Keep
+          // their entries here as comments so they can be restored easily.
+          // '<option value="win95cc.ini">Cosmic Consensus</option>' +
+          // '<option value="win95a.ini">Acrophobia</option>' +
+          // '<option value="win95gtp.ini">Get The Picture</option>' +
+          // '<option value="win95ns.ini">Net Show</option>' +
         '</select>' +
         '<button data-act="start" title="Boot this PC with the selected game.">Start</button>' +
         '<button data-act="stop" title="Shut this PC down. Any game in progress is lost.">Stop</button>' +

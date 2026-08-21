@@ -36,6 +36,11 @@ let ydkjSeq = 0;
 
 function ydkjLog(msg) { console.log(`[ydkj] ${msg}`); }
 
+function ydkjSelected() {
+  const selector = document.getElementById('gameselect');
+  return !selector || selector.value === 'ydkj';
+}
+
 async function ydkjHandleGameConnection(conn) {
   const id = ++ydkjSeq;
   ydkjLog(`Connection #${id} arrived on the game port, but ${YDKJ_DISPLAY_NAME} is HTTP-only.`);
@@ -58,6 +63,7 @@ let ydkjHostInstance = null;
 let ydkjAssignedKey = '';
 
 function ydkjP2PStatus(text) {
+  if (!ydkjSelected()) return;
   const node = document.getElementById('ydkj-p2p-status');
   if (node) node.textContent = text;
   ydkjLog(text);
@@ -66,18 +72,20 @@ function ydkjP2PStatus(text) {
 function ydkjSetGuestKey(key) {
   ydkjAssignedKey = String(key || '').toUpperCase();
   for (const button of document.querySelectorAll('[data-ydkj-buzzer]')) {
-    button.disabled = button.dataset.ydkjBuzzer !== ydkjAssignedKey;
+    button.disabled = !ydkjSelected() || button.dataset.ydkjBuzzer !== ydkjAssignedKey;
   }
+  if (!ydkjSelected()) return;
   ydkjP2PStatus(ydkjAssignedKey ? `Assigned buzzer: ${ydkjAssignedKey}` : 'Waiting for a buzzer assignment');
 }
 
 function ydkjSetAnswerEnabled(enabled) {
   for (const button of document.querySelectorAll('[data-ydkj-answer]')) {
-    button.disabled = !enabled;
+    button.disabled = !ydkjSelected() || !enabled;
   }
   for (const button of document.querySelectorAll('[data-ydkj-screw]')) {
-    button.disabled = !enabled;
+    button.disabled = !ydkjSelected() || !enabled;
   }
+  if (!ydkjSelected()) return;
   ydkjP2PStatus(enabled ? 'Buzz accepted; choose answer 1–4' : 'Waiting for your buzzer');
 }
 
@@ -139,6 +147,19 @@ window.ydkjP2P = {
   startHostStream: ydkjStartHostStream,
   receiveStream: ydkjReceiveStream,
   assignedKey() { return ydkjAssignedKey; },
+  refreshUi() {
+    const selected = ydkjSelected();
+    for (const button of document.querySelectorAll('[data-ydkj-buzzer]')) {
+      button.disabled = !selected || button.dataset.ydkjBuzzer !== ydkjAssignedKey;
+    }
+    for (const button of document.querySelectorAll('[data-ydkj-answer], [data-ydkj-screw]')) {
+      button.disabled = !selected || !guestBuzzAccepted;
+    }
+    if (!selected) {
+      const node = document.getElementById('ydkj-p2p-status');
+      if (node) node.textContent = 'Select You Don\u2019t Know Jack: Net Show to use YDKJ controls.';
+    }
+  },
 };
 
 if (window.p2pBridge) {
@@ -186,6 +207,7 @@ function bindYdkjP2PUI() {
       }
     });
   }
+  window.ydkjP2P.refreshUi();
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindYdkjP2PUI);
 else bindYdkjP2PUI();

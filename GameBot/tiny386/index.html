@@ -839,6 +839,9 @@
                 window.onActiveGameProfileChange = (profile) => {
                     sel.value = profile;
                     syncDroodleButton();
+                    if (window.ydkjP2P && typeof window.ydkjP2P.refreshUi === 'function') {
+                        window.ydkjP2P.refreshUi();
+                    }
                 };
 
                 sel.addEventListener('change', () => {
@@ -856,6 +859,9 @@
                     }
                     window.setActiveGameProfile(want);
                     syncDroodleButton();
+                    if (window.ydkjP2P && typeof window.ydkjP2P.refreshUi === 'function') {
+                        window.ydkjP2P.refreshUi();
+                    }
                     selOut('[game] New connections -> ' + LABEL[want] + '.');
                     if (NOTE[want]) selOut('[game] ' + NOTE[want]);
                     selOut('[game] Games already in progress keep the server they started on.');
