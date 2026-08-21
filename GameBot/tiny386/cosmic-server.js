@@ -1043,12 +1043,11 @@ async function cosmicHttpHandler(request) {
 // question -> answer -> reveal -> results -> advance cycle, segment
 // start/end, and the blowout bonus round at the top of the pyramid.
 //
-// The storm system (runStormSequence / BI insurance) is ported but gated
-// off by STORM_SYSTEM_ENABLED, matching the Python: its wire format was
-// never confirmed against a real capture and the Python's own comment says
-// it "currently crashes the client". The console's STORM command runs it on
-// demand, which is how those field shapes can be probed without turning it
-// on for live games.
+// The storm system (runStormSequence / BI insurance) is ported and controlled
+// by STORM_SYSTEM_ENABLED, matching the Python: its wire format was
+// never confirmed against a real capture and the Python's own comment warns
+// that it may crash the client. The console's STORM command can also run it
+// on demand for testing.
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── game constants (ported from the Python module-level config) ─────────
@@ -1385,8 +1384,8 @@ const LOOP_NEW_SEGMENT_AFTER_EGS = true;
 const ROUNDS_PER_SEGMENT_MIN = 3; // eslint-disable-line no-unused-vars -- kept for parity with the Python source
 const ROUNDS_PER_SEGMENT_MAX = 4; // eslint-disable-line no-unused-vars
 
-// Storm system left OFF -- see module docstring above.
-const STORM_SYSTEM_ENABLED = false;
+// Storm system enabled -- see module docstring above.
+const STORM_SYSTEM_ENABLED = true;
 const STORM_ROUND_IN_SEGMENT = 2;   // fires once roundInSegment reaches this
 const STORM_INSURANCE_COST = 15;    // IQ points spent to buy insurance
 const STORM_INSURANCE_WINDOW_SECONDS = 25; // player's/bots' time to decide
