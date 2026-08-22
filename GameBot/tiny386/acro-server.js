@@ -47,6 +47,24 @@ const ACRO_ROOMS = [
   { name: ACRO_ROOM_NAME, channel: ACRO_ROOM_CHANNEL, clean: 1 },
   { name: 'Dungeon', channel: 'Acro_Dungeon', clean: 0 },
 ];
+// These are the additional rooms named by the original Acrophobia room-list
+// pages and documentation. They remain opt-in because the normal client used
+// to show only the two active server rooms above.
+const ACRO_FULL_ROOMS = [
+  ...ACRO_ROOMS,
+  { name: 'Acrodome', channel: 'Acro_Acrodome', clean: 1, special: 1 },
+  { name: 'Flying Toaster', channel: 'Acro_FlyingToaster', clean: 1, special: 1 },
+  { name: 'Orion Blue', channel: 'Acro_OrionBlue', clean: 1, special: 1 },
+  { name: 'After Dark', channel: 'Acro_AfterDark', clean: 0, special: 1 },
+];
+
+function acroSetting(name) {
+  return !!(typeof window !== 'undefined' && window.acroSettings && window.acroSettings[name]);
+}
+
+function acroRoomCatalog() {
+  return acroSetting('fullRoomList') ? ACRO_FULL_ROOMS : ACRO_ROOMS;
+}
 // Real bot sends an EMPTY mode string, not a word.
 const ACRO_ROOM_MODE = '';
 // The bot tells a lone player this outright; without it the wait looks broken.
@@ -57,7 +75,9 @@ const ACRO_MIN_PLAYERS = 3;
 const ACRO_LEAD_MS = 2500;
 const ACRO_COMP_MS = 60000;
 const ACRO_VOTE_MS = 20000;
-const ACRO_CATEGORY_MS = 10000;
+// The original client gives the round winner five seconds to choose the next
+// category before falling back to General Acrophobia.
+const ACRO_CATEGORY_MS = 5000;
 const ACRO_SCORE_MS = 45000;
 const ACRO_FACEOFF_COMP_MS = 20000;
 const ACRO_FACEOFF_VOTE_MS = 14000;
@@ -192,6 +212,10 @@ class AcroRoom {
     this.faceoffAnswers = new Map();
     this.faceoffVotes = new Map();
     this.faceoffTotals = new Map();
+    this.chatLog = [];
+    this.complaints = [];
+    this.kickVotes = new Map();
+    this.bans = new Map();
   }
 
   humans() { return [...this.clients].filter((c) => c.connected); }
@@ -265,6 +289,10 @@ class AcroClient {
     this.username = null;
     this.score = 0;
     this.inGame = false;
+    this.ignored = new Set();
+    this.hidden = false;
+    this.logging = false;
+    this.chatLog = [];
     this.rosterNames = new Set();
     this.room = null;
     this.channel = null;
@@ -275,6 +303,10 @@ class AcroClient {
   label() { return this.nick || `(unregistered #${this.id})`; }
 
   gameName() { return this.username || this.nick || 'player'; }
+
+  isIgnoring(sender) {
+    return this.ignored.has(String(sender?.gameName ? sender.gameName() : sender).toLowerCase());
+  }
 
   async sendRaw(line) {
     if (!this.connected) return false;
@@ -385,8 +417,17 @@ class AcroClient {
     // there forever: logon_now is its cue to send "logon", so nothing followed.
     this.channel = bare;
     if (bare !== ACRO_LIST_CHANNEL) {
-      this.room = acroGetRoom(bare);
+      const candidate = acroGetRoom(bare);
+      const banUntil = candidate.bans.get(this.gameName()) || 0;
+      if (banUntil > Date.now()) {
+        await this.priv(`chat ${acroQuote('You are temporarily banned from this room.')}`);
+        await this.handleJoin(`#${ACRO_LIST_CHANNEL}`);
+        return;
+      }
+      if (banUntil) candidate.bans.delete(this.gameName());
+      this.room = candidate;
       this.room.clients.add(this);
+      this.chatLog = [];
       this.inGame = false;
       this.rosterNames.clear();
     }
@@ -407,7 +448,7 @@ class AcroClient {
 
   async sendIrcList() {
     await this.sendRaw(`:${ACRO_SERVER_NAME} 321 ${this.nick} Channel :Users Name`);
-    for (const item of ACRO_ROOMS) {
+    for (const item of acroRoomCatalog()) {
       const room = acroGetRoom(item.channel);
       await this.sendRaw(`:${ACRO_SERVER_NAME} 322 ${this.nick} #${item.channel} ${room.humans().length} :${item.name}`);
     }
@@ -491,13 +532,16 @@ class AcroClient {
         // command log_string "AGSM0,746,..." -- telemetry, no reply expected.
         return;
       case 'complain':
-        return this.priv(`chat ${acroQuote('Thank you! Your complaint has been sent.')}`);
+        return this.handleSlashCommand(`/complain ${args.slice(1).join(' ')}`);
       case 'chat':
         acroLog(`CHAT [${this.username}]: ${args[1] || ''}`);
         if (this.room) {
           const text = args[1] || '';
+          if (text.startsWith('/') && await this.handleSlashCommand(text)) return;
+          this.chatLog.push(`${this.gameName()}: ${text}`);
           for (const recipient of this.room.humans()) {
-            if (recipient !== this) {
+            if (recipient !== this && !recipient.isIgnoring(this)) {
+              recipient.chatLog.push(`${this.gameName()}: ${text}`);
               await recipient.sendRaw(`:${this.gameName()}!${this.gameName()}@${ACRO_SERVER_NAME} PRIVMSG ${recipient.nick} :chat ${acroQuote(text)}`);
             }
           }
@@ -518,14 +562,15 @@ class AcroClient {
   async sendRoomList() {
     // start_list bot / list_item bot ... / end_list bot
     await this.priv('start_list bot');
-    for (let index = 0; index < ACRO_ROOMS.length; index++) {
-      const item = ACRO_ROOMS[index];
+    const catalog = acroRoomCatalog();
+    for (let index = 0; index < catalog.length; index++) {
+      const item = catalog[index];
       const room = acroGetRoom(item.channel);
       const highScore = Math.max(0, ...room.humans().map((c) => c.score || 0));
       await this.priv(
         `list_item bot ${index} ${acroQuote(item.name)} 0 ${acroQuote(ACRO_SERVER_NAME)} ${ACRO_PORT} 0 ` +
         `${acroQuote(item.channel)} 0 ${acroQuote(ACRO_BOT_NICK)} ${item.clean} ${acroQuote(room.mode)} ` +
-        `${room.humans().length} ${highScore} 0 0`
+        `${room.humans().length} ${highScore} 0 ${item.special || 0}`
       );
     }
     await this.priv('end_list bot');
@@ -535,7 +580,7 @@ class AcroClient {
     const wanted = String(name || '').toLowerCase();
     for (const room of acroRooms.values()) {
       for (const c of room.humans()) {
-        if ((c.username || '').toLowerCase() === wanted) {
+        if (!c.hidden && (c.username || '').toLowerCase() === wanted) {
           await this.priv(
             `player_found ${acroQuote(c.username)} ${acroQuote(room.channel === ACRO_ROOM_CHANNEL ? ACRO_ROOM_NAME : room.channel.replace(/^Acro_/, ''))} 0 ` +
             `${acroQuote(ACRO_SERVER_NAME)} ${ACRO_PORT} 0 ${acroQuote(room.channel)} 0 ` +
@@ -546,6 +591,185 @@ class AcroClient {
       }
     }
     await this.priv(`player_not_found ${acroQuote(name || '')}`);
+  }
+
+  async sendUserChat(recipient, text) {
+    if (!recipient || !recipient.connected || recipient.isIgnoring(this)) return;
+    const line = `${this.gameName()}: ${text}`;
+    recipient.chatLog.push(line);
+    await recipient.sendRaw(
+      `:${this.gameName()}!${this.gameName()}@${ACRO_SERVER_NAME} PRIVMSG ${recipient.nick} :chat ${acroQuote(text)}`
+    );
+  }
+
+  async handleSlashCommand(text) {
+    const match = String(text || '').match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
+    if (!match) return false;
+    const command = match[1].toLowerCase();
+    const rest = (match[2] || '').trim();
+    const room = this.room;
+
+    if (command === 'help' || command === '?') {
+      await this.priv(`chat ${acroQuote('/help /me /msg /complain /ignore /log /save /v /c /stat /find /who /hide /kick')}`);
+      return true;
+    }
+    if (command === 'find') {
+      await this.findPlayer(rest.replace(/^"|"$/g, ''));
+      return true;
+    }
+    if (command === 'stat') {
+      if (!room) {
+        await this.priv(`chat ${acroQuote('You are not in a game room.')}`);
+        return true;
+      }
+      const scores = acroScoreEntries(room).map(([name, score]) => `${name}: ${score}`).join(', ');
+      await this.priv(`chat ${acroQuote(`Round ${room.round}, ${room.phase}, category: ${room.category}. ${scores}`)}`);
+      return true;
+    }
+    if (command === 'ignore') {
+      if (!room || !rest) return true;
+      const wanted = rest.toLowerCase();
+      const target = room.humans().find((c) =>
+        this.room.gameName(c).toLowerCase() === wanted || c.nick.toLowerCase() === wanted
+      );
+      if (!target || target === this) return true;
+      const key = target.gameName().toLowerCase();
+      if (this.ignored.has(key)) {
+        this.ignored.delete(key);
+        await this.priv(`chat ${acroQuote(`${target.gameName()} is no longer ignored.`)}`);
+      } else {
+        this.ignored.add(key);
+        await this.priv(`chat ${acroQuote(`${target.gameName()} is now ignored.`)}`);
+      }
+      return true;
+    }
+    if (command === 'hide') {
+      const setting = rest.toLowerCase();
+      this.hidden = setting === 'on' ? true : setting === 'off' ? false : !this.hidden;
+      await this.priv(`chat ${acroQuote(this.hidden ? 'You are hidden from Find My Friend.' : 'You are visible to Find My Friend.')}`);
+      return true;
+    }
+    if (command === 'log') {
+      const setting = rest.toLowerCase();
+      if (setting === 'on') this.logging = true;
+      else if (setting === 'off') this.logging = false;
+      else this.logging = !this.logging;
+      await this.priv(`chat ${acroQuote(`Chat logging ${this.logging ? 'on' : 'off'}.`)}`);
+      return true;
+    }
+    if (command === 'save') {
+      const lines = this.chatLog.length;
+      const content = this.chatLog.join('\n') + (lines ? '\n' : '');
+      if (lines) acroLog(`SAVE [${this.gameName()}] ${this.chatLog.join(' | ')}`);
+      if (typeof document !== 'undefined' && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `acrolog-${this.gameName().replace(/[^a-z0-9_-]/gi, '_')}.txt`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+      }
+      await this.priv(`chat ${acroQuote(`Saved ${lines} chat message(s) to an ACROLOG download.`)}`);
+      return true;
+    }
+    if (command === 'who') {
+      if (!room || !rest) return true;
+      const wanted = rest.toLowerCase();
+      const target = room.humans().find((c) =>
+        this.room.gameName(c).toLowerCase() === wanted || c.nick.toLowerCase() === wanted
+      );
+      if (target) {
+        await this.priv(`chat ${acroQuote(`${target.gameName()} (connection name: ${target.nick})`)}`);
+      } else {
+        await this.priv(`chat ${acroQuote(`No player named ${rest} is in this room.`)}`);
+      }
+      return true;
+    }
+    if (command === 'complain') {
+      if (!room) return true;
+      const split = rest.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+      if (!split || !split[2]) return true;
+      const target = room.humans().find((c) =>
+        this.room.gameName(c).toLowerCase() === split[1].toLowerCase() || c.nick.toLowerCase() === split[1].toLowerCase()
+      );
+      if (target && target !== this) {
+        room.complaints.push({ from: this.gameName(), target: target.gameName(), reason: split[2], at: Date.now() });
+        acroLog(`COMPLAINT [${this.gameName()}] about [${target.gameName()}]: ${split[2]}`);
+        await this.priv(`chat ${acroQuote('Thank you! Your complaint has been recorded.')}`);
+      }
+      return true;
+    }
+    if (command === 'kick') {
+      if (!room) return true;
+      const wanted = rest.toLowerCase();
+      const target = room.humans().find((c) =>
+        this.room.gameName(c).toLowerCase() === wanted || c.nick.toLowerCase() === wanted
+      );
+      if (!target || target === this) return true;
+      const ranked = acroScoreEntries(room);
+      const topScore = ranked[0]?.[1] ?? 0;
+      const targetRank = ranked.findIndex(([name]) => name === target.gameName());
+      if (targetRank < 2 || target.score >= topScore) {
+        await this.priv(`chat ${acroQuote('That player cannot be kicked while in first or second place.')}`);
+        return true;
+      }
+      if (room.humans().length <= 2) {
+        await this.priv(`chat ${acroQuote('A kick requires at least three players.')}`);
+        return true;
+      }
+      const votes = room.kickVotes.get(target.gameName()) || new Set();
+      votes.add(this.gameName());
+      room.kickVotes.set(target.gameName(), votes);
+      const needed = Math.floor(room.humans().length / 2) + 1;
+      await room.broadcast(`chat ${acroQuote(`${this.gameName()} voted to kick ${target.gameName()} (${votes.size}/${needed}).`)}`);
+      if (votes.size < needed) return true;
+      room.bans.set(target.gameName(), Date.now() + 4 * 60 * 60 * 1000);
+      await target.priv(`chat ${acroQuote('You have been kicked from this room for four hours.')}`);
+      target.leaveRoom();
+      await target.handleJoin(`#${ACRO_LIST_CHANNEL}`);
+      return true;
+    }
+    if (command === 'v') {
+      if (!room) return true;
+      const number = Number.parseInt(rest, 10);
+      if (!Number.isInteger(number) || number < 1) return true;
+      let choices = [];
+      if (room.phase === 'vote') choices = [...room.answers.keys()];
+      else if (room.phase === 'faceoff_vote') choices = [...room.faceoffPlayers];
+      if (number <= choices.length) {
+        const target = room.protocolName(this, choices[number - 1]);
+        await this.handleResponse(['response', 'vote', target, String(room.round)]);
+      }
+      return true;
+    }
+    if (command === 'c') {
+      const number = Number.parseInt(rest, 10);
+      if (Number.isInteger(number) && number >= 1 && number <= 4) {
+        await this.handleResponse(['response', 'category', String(number - 1)]);
+      }
+      return true;
+    }
+    if (command === 'me') {
+      if (!room || !rest) return true;
+      const message = `** ${this.gameName()} ${rest}`;
+      for (const recipient of room.humans()) {
+        if (recipient !== this) await this.sendUserChat(recipient, message);
+      }
+      return true;
+    }
+    if (command === 'msg' || command === 'message') {
+      if (!room) return true;
+      const split = rest.match(/^(\S+)(?:\s+([\s\S]*))?$/);
+      if (!split || !split[2]) return true;
+      const wanted = split[1].toLowerCase();
+      const recipient = room.humans().find((c) =>
+        this.room.gameName(c).toLowerCase() === wanted || c.nick.toLowerCase() === wanted
+      );
+      if (recipient) await this.sendUserChat(recipient, split[2]);
+      return true;
+    }
+    return false;
   }
 
   async startPlay() {
@@ -569,9 +793,10 @@ class AcroClient {
     }
     const alreadyRunning = room.running || room.starting;
     const humansBeforeJoin = room.humans().length;
+    const initialBotScore = acroSetting('testBotsAt30') ? ACRO_FACEOFF_SCORE : 0;
     if (!alreadyRunning) {
       for (const c of room.humans()) c.score = 0;
-      for (const bot of room.botScores.keys()) room.botScores.set(bot, 0);
+      for (const bot of room.botScores.keys()) room.botScores.set(bot, initialBotScore);
     }
     // current_state carries a STATE NAME, not a number -- the transcript shows
     // "current_state start_game", which the client logs as state 10 (waiting to
@@ -580,8 +805,8 @@ class AcroClient {
     await this.priv(`chat ${acroQuote(`Welcome to ${ACRO_ROOM_NAME}`)}`);
     const botsWereCreated = room.botScores.size === 0;
     if (botsWereCreated) {
-      for (const bot of ACRO_BOTS.slice(0, 2)) room.botScores.set(bot, 0);
-      for (const bot of room.botScores.keys()) await room.addPlayer(bot, 0, bot);
+      for (const bot of ACRO_BOTS.slice(0, 2)) room.botScores.set(bot, initialBotScore);
+      for (const bot of room.botScores.keys()) await room.addPlayer(bot, initialBotScore, bot);
     }
     await room.addPlayer(this.gameName(), this.score, this.username, null, this);
     // Bot creation already broadcast their initial rows to this player.
@@ -647,6 +872,11 @@ class AcroClient {
       acroLog(`STAT: ${this.username} voted for ${args[2]}`);
     } else if (kind === 'category') {
       const idx = parseInt(args[2], 10);
+      const picker = room.gameName(this);
+      if (room.phase === 'category' && picker !== room.winner) {
+        await this.priv(`chat ${acroQuote('Only the round winner can choose the category.')}`);
+        return;
+      }
       room.categoryIndex = Number.isInteger(idx) ? String(idx) : '';
       if (room.phase === 'category' && idx >= 0 && idx < room.categoryChoices.length) {
         room.category = room.categoryChoices[idx];
@@ -810,14 +1040,14 @@ async function acroRunRoom(room) {
     }
     for (const recipient of room.humans()) {
       const picker = room.protocolName(recipient, room.winner);
-      await recipient.priv(`start_categories 2500 10000 1 ${acroQuote(picker)}`);
+      await recipient.priv(`start_categories ${ACRO_LEAD_MS} ${ACRO_CATEGORY_MS} 1 ${acroQuote(picker)}`);
       await recipient.priv('start_list category');
       for (let i = 0; i < room.categoryChoices.length; i++) await recipient.priv(`list_item category ${i} ${acroQuote(room.categoryChoices[i])}`);
       await recipient.priv('list_item category 3 "General Acrophobia"');
       await recipient.priv('end_list category');
     }
     if (room.winner && room.botScores.has(room.winner)) room.categoryIndex = String(room.round % 3);
-    await acroSleep(10000);
+    await acroSleep(ACRO_CATEGORY_MS);
     const selected = Number.parseInt(room.categoryIndex, 10);
     room.category = Number.isInteger(selected) && selected >= 0 && selected < 3
       ? room.categoryChoices[selected] : 'General Acrophobia';
@@ -834,6 +1064,14 @@ async function acroRunFaceoff(room, alive) {
   room.faceoffPlayers = [ranked[0][0], ranked[1][0]];
   room.faceoffTotals = new Map(room.faceoffPlayers.map((name) => [name, 0]));
   acroLog(`STAT: FACEOFF -- ${room.faceoffPlayers[0]} vs ${room.faceoffPlayers[1]}`);
+  // Face-off scoring is separate from the ordinary game score. The original
+  // client clears both finalists' displayed scores before the first lightning
+  // round begins.
+  for (const player of room.faceoffPlayers) {
+    const human = room.humans().find((c) => room.gameName(c) === player);
+    if (human) human.score = 0;
+    if (room.botScores.has(player)) room.botScores.set(player, 0);
+  }
   room.phase = 'faceoff';
   await room.broadcast(`chat ${acroQuote('A face-off is about to begin!')}`);
 
@@ -902,11 +1140,16 @@ async function acroRunFaceoff(room, alive) {
     // Face-off answer lists are room broadcasts; private lists are ignored by
     // some clients. Voters now receive this round's choices immediately.
     await room.broadcast('start_list answer');
+    // Give the 1990s client a scheduling turn to switch into its list parser.
+    // Browser TCP can otherwise deliver the marker and all rows in one flush.
+    await acroSleep(100);
     for (let i = 0; i < room.faceoffPlayers.length; i++) {
       const player = room.faceoffPlayers[i];
       await room.broadcast(`list_item answer ${i} ${acroQuote(player)} ${acroQuote(answers.get(player).acro)}`);
+      await acroSleep(50);
     }
     await room.broadcast('end_list answer');
+    await acroSleep(100);
     room.phase = 'faceoff_vote';
     for (const c of room.humans()) {
       if (!room.faceoffPlayers.includes(room.gameName(c))) {
@@ -935,33 +1178,50 @@ async function acroRunFaceoff(room, alive) {
     }
 
     await room.broadcast(`start_face_scores ${r}`);
+    await acroSleep(250);
     await room.broadcast('start_list vote_count');
+    await acroSleep(100);
     for (let i = 0; i < room.faceoffPlayers.length; i++) {
       const player = room.faceoffPlayers[i];
       await room.broadcast(`list_item vote_count ${i} ${acroQuote(player)} ${counts.get(player)}`);
+      await acroSleep(50);
     }
     await room.broadcast('end_list vote_count');
     await acroSleep(1000);
     await room.broadcast('start_list faceoff_score');
+    await acroSleep(100);
     for (let i = 0; i < room.faceoffPlayers.length; i++) {
       const player = room.faceoffPlayers[i];
       await room.broadcast(`list_item faceoff_score ${i} ${acroQuote(player)} ${room.faceoffTotals.get(player)}`);
+      await acroSleep(50);
     }
     await room.broadcast('end_list faceoff_score');
     await acroSleep(20000);
   }
 
   room.phase = 'faceoff_results';
-  const finalWinner = [...room.faceoffTotals.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const rankedFinalists = [...room.faceoffTotals.entries()].sort((a, b) => b[1] - a[1]);
+  const topScore = rankedFinalists.length ? rankedFinalists[0][1] : 0;
+  const tiedFinalists = rankedFinalists.filter(([, score]) => score === topScore);
+  const finalWinner = acroSetting('allowFaceoffTie') && tiedFinalists.length > 1
+    ? '' : (rankedFinalists[0]?.[0] || '');
   await room.broadcast('start_final_scores 21250');
   await acroSleep(28000);
   await room.broadcast('start_list score');
   let i = 0;
   for (const [player] of acroScoreEntries(room)) {
-    await room.broadcast(`list_item score ${i++} ${acroQuote(player)} 0 0`);
+    // Keep the face-off totals visible on the final-results screen.  The
+    // ordinary room scores were cleared when the face-off began, so sending
+    // those values here made every finalist appear to finish on zero even
+    // though the face-off vote rounds had been counted correctly.
+    const finalScore = room.faceoffTotals.has(player) ? room.faceoffTotals.get(player) : 0;
+    await room.broadcast(`list_item score ${i++} ${acroQuote(player)} ${finalScore} 0`);
   }
   await room.broadcast('end_list score');
-  await room.broadcast(`chat ${acroQuote(`${finalWinner} wins the face-off!`)}`);
+  const resultMessage = finalWinner
+    ? `${finalWinner} wins the face-off!`
+    : 'The face-off is a tie!';
+  await room.broadcast(`chat ${acroQuote(resultMessage)}`);
   // Let the final faceoff/results screen remain visible before resetting the
   // scores and starting the next ordinary game.
   await acroSleep(28000);

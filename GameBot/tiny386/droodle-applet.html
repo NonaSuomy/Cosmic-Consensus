@@ -126,7 +126,7 @@ body {
 
 fieldset {
   border: 2px groove var(--face-lit); margin: 0; padding: 7px 9px 9px;
-  background: var(--face);
+  background: var(--face); min-width: 0; max-width: 100%;
 }
 legend { padding: 0 4px; font-weight: bold; }
 .row { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
@@ -190,17 +190,19 @@ input[type=text] {
 .batch-drop {
   border: 2px dashed var(--face-dim); background: #fff; padding: 10px 8px;
   text-align: center; cursor: pointer; line-height: 1.4;
+  max-width: 100%; overflow-wrap: anywhere;
 }
 .batch-drop.dragover { background: #dbe8f5; border-color: var(--title); }
 .batch-list { display: flex; flex-direction: column; gap: 4px; max-height: 300px;
-  overflow: auto; margin-top: 7px; }
+  overflow: auto; margin-top: 7px; max-width: 100%; min-width: 0; }
 .batch-item { display: grid; grid-template-columns: 18px 58px 1fr auto; gap: 6px;
-  align-items: center; border: 1px inset var(--face); background: #fff; padding: 3px; }
+  align-items: center; border: 1px inset var(--face); background: #fff; padding: 3px;
+  min-width: 0; max-width: 100%; }
 .batch-item img { width: 56px; height: 44px; object-fit: contain; background: #000; }
 .batch-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.batch-meta { color: var(--hint); font-size: 10px; }
+.batch-meta { color: var(--hint); font-size: 10px; min-width: 0; overflow-wrap: anywhere; }
 .batch-progress { width: 100%; height: 13px; display: block; }
-.batch-status { font-size: 10px; white-space: nowrap; }
+.batch-status { font-size: 10px; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 .batch-status.ok { color: #006600; }
 .batch-status.bad { color: #a00000; }
 .batch-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }

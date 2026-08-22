@@ -5391,7 +5391,7 @@ async function consoleExec(line, print) {
     const PROFILES = {
       COSMIC: { key: 'cosmic', label: 'Cosmic Consensus' },
       GTP:    { key: 'gtp',    label: 'Get The Picture', note: 'Lobby + record only: everything past RS is logged, not answered.' },
-      ACRO:   { key: 'acro',   label: 'Acrophobia',      note: 'Ported from Acrobot; never run against a real client yet.' },
+      ACRO:   { key: 'acro',   label: 'Acrophobia' },
       YDKJ:   { key: 'ydkj',   label: "You Don't Know Jack: Net Show", note: 'HTTP only -- game-port connections are refused by design.' },
     };
     const want = arg.toUpperCase();

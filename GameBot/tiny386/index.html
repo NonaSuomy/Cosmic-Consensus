@@ -57,10 +57,26 @@
             }
             .window {
                 display: inline-block;
+                box-sizing: border-box;
+                max-width: 100%;
                 -webkit-user-select: none;
                 -moz-user-select: none;
                 -ms-user-select: none;
                 user-select: none;
+            }
+            .window-body {
+                min-width: 0;
+                max-width: 100%;
+            }
+            #logarea {
+                box-sizing: border-box;
+                width: 100%;
+                max-width: 100%;
+                min-width: 0;
+                white-space: pre-wrap;
+                overflow-wrap: anywhere;
+                overflow: auto;
+                resize: vertical;
             }
         </style>
         <style>
@@ -96,6 +112,13 @@
         </style>
     </head>
     <body>
+        <script>
+            window.acroSettings = window.acroSettings || {
+                testBotsAt30: false,
+                fullRoomList: false,
+                allowFaceoffTie: false,
+            };
+        </script>
         <hr>
         <!-- Page-level toolbar. Everything here is global; per-machine controls
              live inside each client window. -->
@@ -107,6 +130,14 @@
                 <div class="quick-start-row">
                     <button id="btn-quick-start" onclick="start_default_client()"
                             title="Create and boot one game client with the default settings.">Start 1 Client</button>
+                    <label for="gameselect">Server:</label>
+                    <select id="gameselect"
+                            title="Which game server answers NEW connections. Games already running keep the server they started on, so switch from the title screen. Same as the console's GAME command.">
+                        <option value="cosmic">Cosmic Consensus</option>
+                        <option value="gtp">Get The Picture</option>
+                        <option value="acro">Acrophobia</option>
+                        <option value="ydkj">You Don't Know Jack: Net Show</option>
+                    </select>
                     <span>Simple mode</span>
                     <span id="clientstatus"></span>
                 </div>
@@ -134,6 +165,24 @@
                            title="Boot each PC as soon as its window is created, instead of waiting for you to press Start on each one. They share one disk download, so starting several together is no slower than starting one.">Auto-start</label>
                     <span style="margin-left: 8px;">Session setup</span>
                 </div>
+                <fieldset style="margin:6px 0; max-width:720px;">
+                    <legend>Acrophobia test settings</legend>
+                    <label title="Give Sparky and Mimsy 30 points when a new Acro room starts, so the face-off can be tested immediately.">
+                        <input type="checkbox" id="acro-test-bots"
+                               onchange="window.acroSettings.testBotsAt30 = this.checked">
+                        Start Sparky and Mimsy at 30 points
+                    </label>
+                    <label style="margin-left:12px;" title="Show the expanded Acrophobia room catalog, including the rooms documented by the original bot.">
+                        <input type="checkbox" id="acro-full-rooms"
+                               onchange="window.acroSettings.fullRoomList = this.checked">
+                        Use full Acro room list
+                    </label>
+                    <label style="margin-left:12px;" title="Leave an equal face-off result tied instead of awarding it to the first finalist.">
+                        <input type="checkbox" id="acro-faceoff-tie"
+                               onchange="window.acroSettings.allowFaceoffTie = this.checked">
+                        Allow face-off ties
+                    </label>
+                </fieldset>
                 <div class="controls-row">
                     <button id="btn-log" onclick="toggle_log()"
                             title="Show or hide the log panel. It keeps recording either way, so nothing is missed while hidden.">Show Log</button>
@@ -147,16 +196,6 @@
                             title="Re-fetch ui.js and rebuild every client window's controls, WITHOUT restarting the emulators. The live canvas is moved into the new markup, so the VMs keep running. Use this after editing ui.js; changes to index.html itself still need a page refresh.">Reload UI</button>
                     <button onclick="toggle_about()"
                             title="Credits for beZerk Revived and Tiny386.">About</button>
-                </div>
-                <div class="controls-row">
-                    <label for="gameselect">Server:</label>
-                    <select id="gameselect"
-                            title="Which game server answers NEW connections. Games already running keep the server they started on, so switch from the title screen. Same as the console's GAME command.">
-                        <option value="cosmic">Cosmic Consensus</option>
-                        <option value="gtp">Get The Picture</option>
-                        <option value="acro">Acrophobia</option>
-                        <option value="ydkj">You Don't Know Jack: Net Show</option>
-                    </select>
                 </div>
                 <div class="controls-row" id="gtp-tools-row">
                     <label for="btn-droodle">Get The Picture tools:</label>
@@ -220,7 +259,7 @@
                      so opening the log is how you read replies. Hidden and
                      shown alongside the log by toggle_log(). -->
                 <div class="controls-row" id="consolerow" style="display: none;">
-                    <span style="font-family: monospace;">cosmic&gt;</span>
+                    <span id="consoleprompt" style="font-family: monospace;">cosmic&gt;</span>
                     <input type="text" id="consoleinput" spellcheck="false"
                            autocomplete="off" autocapitalize="off"
                            style="font-family: monospace; flex: 1 1 auto; min-width: 0;"
@@ -816,7 +855,6 @@
                 };
                 const NOTE = {
                     gtp: 'Lobby + room entry work; the game segments are logged, not answered.',
-                    acro: 'Ported from Acrobot; never run against a real client yet.',
                     ydkj: 'HTTP only -- game-port connections are refused by design.',
                 };
 
@@ -847,6 +885,8 @@
 
                 window.onActiveGameProfileChange = (profile) => {
                     sel.value = profile;
+                    const prompt = document.getElementById('consoleprompt');
+                    if (prompt) prompt.textContent = String(profile || 'cosmic') + '>';
                     syncDroodleButton();
                     if (window.ydkjP2P && typeof window.ydkjP2P.refreshUi === 'function') {
                         window.ydkjP2P.refreshUi();
@@ -878,7 +918,11 @@
 
                 // Reflect whatever the server already has -- a reload of
                 // cosmic-server.js resets it to Cosmic, and the box has to say so.
-                if (window.getActiveGameProfile) sel.value = window.getActiveGameProfile();
+                if (window.getActiveGameProfile) {
+                    const profile = window.getActiveGameProfile();
+                    sel.value = profile;
+                    window.onActiveGameProfileChange(profile);
+                }
                 syncDroodleButton();
             }
 
