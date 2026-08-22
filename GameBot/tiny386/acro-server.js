@@ -62,6 +62,10 @@ function acroSetting(name) {
   return !!(typeof window !== 'undefined' && window.acroSettings && window.acroSettings[name]);
 }
 
+function acroNoAdvertisements() {
+  return !!(typeof window !== 'undefined' && window.gameSettings
+    && window.gameSettings.noAdvertisements);
+}
 function acroRoomCatalog() {
   return acroSetting('fullRoomList') ? ACRO_FULL_ROOMS : ACRO_ROOMS;
 }
@@ -123,6 +127,12 @@ const ACRO_CATEGORIES = [
 ];
 
 const ACRO_BOTS = ['Sparky', 'Mimsy', 'Rooter', 'Blix', 'Quill'];
+const ACRO_LOGIN_AD_FILE = 'acr182.srf';
+const ACRO_NO_AD_FILE = 'droodle-miki-test.srf';
+// Acrophobia has a separate interstitial protocol for downloading and then
+// playing ads.  Unlike sponsor_ad, these filenames are fetched from the
+// configured Content Server (Dispatch.ini -> AdServerFolder).
+const ACRO_INTERSTITIAL_ADS = ['acr182-repacked.srf'];
 
 function acroLog(msg) { console.log(`[acro] ${msg}`); }
 function acroSleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -516,7 +526,11 @@ class AcroClient {
         // (IRCClient.py:167-202): in a game room it is the sponsor ad; in the
         // lobby it is the room list. Never both.
         if (this.channel && this.channel !== ACRO_LIST_CHANNEL) {
-          await this.priv(`sponsor_ad ${acroQuote('acr182.srf')}`);
+          // The custom replacement keeps the normal sponsor handshake alive;
+          // it is served by HTTP from AdServerFolder under its own filename.
+          const sponsorFile = acroNoAdvertisements() ? ACRO_NO_AD_FILE : ACRO_LOGIN_AD_FILE;
+          await this.priv(`sponsor_ad ${acroQuote(sponsorFile)}`);
+          acroLog(`STAT: login sponsor ${sponsorFile}${acroNoAdvertisements() ? ' (no-ad replacement)' : ''}`);
         } else {
           await this.sendRoomList();
         }
@@ -953,6 +967,32 @@ async function acroSendRoundResults(room, entries, winner, counts) {
   }
 }
 
+async function acroRunInterstitial(room, alive) {
+  if (acroNoAdvertisements()) {
+    acroLog('STAT: interstitial advertisements disabled.');
+    return;
+  }
+  const ads = ACRO_INTERSTITIAL_ADS.filter(Boolean);
+  if (!ads.length) return;
+  // This is the sequence preserved in the original Acrobot source. The
+  // download_ad list causes the client to fetch each SRF from AdServerFolder;
+  // play_ad then selects the already-downloaded resource for playback.
+  await room.broadcast('start_list download_ad');
+  for (let i = 0; i < ads.length; i++) {
+    await room.broadcast(`list_item download_ad ${i + 1} ${acroQuote(ads[i])}`);
+  }
+  await room.broadcast('end_list download_ad');
+  await room.broadcast(`start_ad ${ACRO_LEAD_MS} ${ACRO_VOTE_MS} 1`);
+  await acroSleep(ACRO_LEAD_MS);
+  if (!alive()) return;
+  await room.broadcast('start_list play_ad');
+  for (let i = 0; i < ads.length; i++) {
+    await room.broadcast(`list_item play_ad ${i + 1} ${acroQuote(ads[i])}`);
+  }
+  await room.broadcast('end_list play_ad');
+  await acroSleep(ACRO_VOTE_MS);
+}
+
 async function acroRunRoom(room) {
   room.running = true;
   const gen = ++room.generation;
@@ -1023,7 +1063,12 @@ async function acroRunRoom(room) {
     await acroSleep(ACRO_RESULT_DISPLAY_MS);
     if (!alive()) break;
 
-    if (acroScoreEntries(room).some(([, score]) => score >= ACRO_FACEOFF_SCORE)) {
+    const faceoffDue = acroScoreEntries(room).some(([, score]) => score >= ACRO_FACEOFF_SCORE);
+    if (faceoffDue || room.round % 3 === 0) {
+      await acroRunInterstitial(room, alive);
+      if (!alive()) break;
+    }
+    if (faceoffDue) {
       await acroRunFaceoff(room, alive);
       if (!alive()) break;
       room.round = 0;
@@ -1064,14 +1109,9 @@ async function acroRunFaceoff(room, alive) {
   room.faceoffPlayers = [ranked[0][0], ranked[1][0]];
   room.faceoffTotals = new Map(room.faceoffPlayers.map((name) => [name, 0]));
   acroLog(`STAT: FACEOFF -- ${room.faceoffPlayers[0]} vs ${room.faceoffPlayers[1]}`);
-  // Face-off scoring is separate from the ordinary game score. The original
-  // client clears both finalists' displayed scores before the first lightning
-  // round begins.
-  for (const player of room.faceoffPlayers) {
-    const human = room.humans().find((c) => room.gameName(c) === player);
-    if (human) human.score = 0;
-    if (room.botScores.has(player)) room.botScores.set(player, 0);
-  }
+  // Keep the ordinary standings visible during the face-off introduction.
+  // The original Acrobot does not clear the finalists here; it resets scores
+  // only after the final face-off screen has finished.
   room.phase = 'faceoff';
   await room.broadcast(`chat ${acroQuote('A face-off is about to begin!')}`);
 
@@ -1176,6 +1216,10 @@ async function acroRunFaceoff(room, alive) {
     for (const name of room.faceoffPlayers) {
       room.faceoffTotals.set(name, room.faceoffTotals.get(name) + counts.get(name));
     }
+    acroLog(`STAT: face-off round ${r} counts: ${room.faceoffPlayers[0]}=${counts.get(room.faceoffPlayers[0])}, `
+      + `${room.faceoffPlayers[1]}=${counts.get(room.faceoffPlayers[1])}; `
+      + `totals=${room.faceoffPlayers[0]}:${room.faceoffTotals.get(room.faceoffPlayers[0])}, `
+      + `${room.faceoffPlayers[1]}:${room.faceoffTotals.get(room.faceoffPlayers[1])}`);
 
     await room.broadcast(`start_face_scores ${r}`);
     await acroSleep(250);

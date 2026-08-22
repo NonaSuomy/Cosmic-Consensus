@@ -157,7 +157,7 @@ window.ydkjP2P = {
     }
     if (!selected) {
       const node = document.getElementById('ydkj-p2p-status');
-      if (node) node.textContent = 'Select You Don\u2019t Know Jack: Net Show to use YDKJ controls.';
+      if (node) node.textContent = 'P2P connection required; select You Don\u2019t Know Jack: Net Show to use YDKJ controls.';
     }
   },
 };

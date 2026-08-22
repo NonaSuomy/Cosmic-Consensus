@@ -547,7 +547,7 @@ const stop = () => { drawing = false; before = null; };
 paper.addEventListener("pointerup", stop);
 paper.addEventListener("pointercancel", stop);
 paper.addEventListener("pointerleave", () => {
-  document.getElementById("pos").textContent = "—";
+  document.getElementById("pos").textContent = "-";
 });
 
 document.getElementById("undo").onclick = () => restore(undoStack, redoStack);

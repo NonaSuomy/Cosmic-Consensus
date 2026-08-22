@@ -78,6 +78,17 @@
                 overflow: auto;
                 resize: vertical;
             }
+            /* 98.css normally hides native checkboxes and paints them only
+               when the input is an adjacent sibling of its label. The server
+               settings use wrapped labels for compactness, so keep these
+               native controls visible and reliable. */
+            .server-test-settings input[type="checkbox"] {
+                opacity: 1 !important;
+                position: static !important;
+                width: auto !important;
+                height: auto !important;
+                appearance: auto;
+            }
         </style>
         <style>
           #virtual-kb {
@@ -117,6 +128,144 @@
                 testBotsAt30: false,
                 fullRoomList: false,
                 allowFaceoffTie: false,
+                testSettingsEnabled: false,
+            };
+            window.gameSettings = window.gameSettings || { noAdvertisements: false };
+            window.gtpSettings = window.gtpSettings || {
+                timeScale: 1,
+                forcedVariant: '',
+                forceNobodyComposed: false,
+                testSettingsEnabled: false,
+            };
+            window.cosmicSettings = window.cosmicSettings || {
+                storms: true,
+                singleWordQuestions: true,
+                singleWordOpenEnded: true,
+                firstQuestionSingleWord: true,
+                questionTextAfterBuild: true,
+                fourAnswerOnly: false,
+                pyramidBuildProbe: true,
+                autoIncludePrs: true,
+                clearUnusedAnswerSlots: false,
+                clearUnusedResultSlots: false,
+                avoidFinalSlotWinner: true,
+                loopAfterEndgame: true,
+                commandLabMode: false,
+                kaloopHeartbeat: false,
+                jgsPackets: false,
+                preflightQuestions: false,
+                questionPacketMode: 'QT',
+                testSettingsEnabled: false,
+            };
+            window.toggle_server_test_settings = function (enabled) {
+                enabled = !!enabled;
+                window.acroSettings.testSettingsEnabled = enabled;
+                window.gtpSettings.testSettingsEnabled = enabled;
+                window.cosmicSettings.testSettingsEnabled = enabled;
+                ['acro-test-bots', 'acro-full-rooms', 'acro-faceoff-tie',
+                 'gtp-test-time', 'gtp-test-variant', 'gtp-test-empty-caption',
+                 'cosmic-test-storms', 'cosmic-test-single-word',
+                 'cosmic-test-single-word-open', 'cosmic-test-first-single-word',
+                 'cosmic-test-text-after-build', 'cosmic-test-four-answer',
+                 'cosmic-test-build-probe', 'cosmic-test-kaloop',
+                 'cosmic-test-jgs', 'cosmic-test-preflight', 'cosmic-test-packet-mode',
+                 'cosmic-test-auto-prs', 'cosmic-test-clear-answer',
+                 'cosmic-test-clear-result', 'cosmic-test-avoid-winner',
+                 'cosmic-test-loop-endgame', 'cosmic-test-lab', 'server-test-no-ads']
+                    .forEach(function (id) {
+                        const control = document.getElementById(id);
+                        if (control) control.disabled = !enabled;
+                    });
+                if (!enabled) {
+                    window.acroSettings.testBotsAt30 = false;
+                    window.acroSettings.fullRoomList = false;
+                    window.acroSettings.allowFaceoffTie = false;
+                    window.gtpSettings.timeScale = 1;
+                    window.gtpTimeScale = 1;
+                    window.gtpSettings.forcedVariant = '';
+                    window.gtpSettings.forceNobodyComposed = false;
+                    window.cosmicSettings.storms = true;
+                    window.cosmicSettings.singleWordQuestions = true;
+                    window.cosmicSettings.singleWordOpenEnded = true;
+                    window.cosmicSettings.firstQuestionSingleWord = true;
+                    window.cosmicSettings.questionTextAfterBuild = true;
+                    window.cosmicSettings.fourAnswerOnly = false;
+                    window.cosmicSettings.pyramidBuildProbe = true;
+                    window.cosmicSettings.autoIncludePrs = true;
+                    window.cosmicSettings.clearUnusedAnswerSlots = false;
+                    window.cosmicSettings.clearUnusedResultSlots = false;
+                    window.cosmicSettings.avoidFinalSlotWinner = true;
+                    window.cosmicSettings.loopAfterEndgame = true;
+                    window.cosmicSettings.commandLabMode = false;
+                    window.gameSettings.noAdvertisements = false;
+                    window.cosmicSettings.kaloopHeartbeat = false;
+                    window.cosmicSettings.jgsPackets = false;
+                    window.cosmicSettings.preflightQuestions = false;
+                    window.cosmicSettings.questionPacketMode = 'QT';
+                    if (typeof window.gtpVariant === 'function') window.gtpVariant(null);
+                    if (typeof window.gtpNobodyComposed === 'function') window.gtpNobodyComposed(null);
+                    if (typeof window.cosmicApplySettings === 'function') {
+                        window.cosmicApplySettings(window.cosmicSettings);
+                    }
+                }
+                window.update_server_test_settings();
+            };
+            window.toggle_acro_test_settings = function (enabled) {
+                const master = document.getElementById('server-test-settings-enable');
+                if (master) master.checked = !!enabled;
+                window.toggle_server_test_settings(enabled);
+            };
+            window.update_server_test_settings = function () {
+                const selected = (document.getElementById('gameselect') || {}).value || 'cosmic';
+                document.querySelectorAll('[data-server-test-panel]').forEach(function (panel) {
+                    panel.hidden = panel.dataset.serverTestPanel !== selected;
+                });
+                const note = document.getElementById('server-test-settings-note');
+                if (note) note.textContent = selected === 'cosmic'
+                    ? 'Cosmic Consensus has no server-specific test switches.'
+                    : selected === 'gtp'
+                        ? 'GTP timing and protocol-path test switches.'
+                        : selected === 'ydkj'
+                            ? 'YDKJ Net Show is HTTP/client-side; its P2P controls are below.'
+                            : 'Acrophobia game-flow test switches.';
+            };
+            window.set_cosmic_test_setting = function (name, value) {
+                window.cosmicSettings[name] = value;
+                if (typeof window.cosmicApplySettings === 'function') {
+                    window.cosmicApplySettings(window.cosmicSettings);
+                }
+            };
+            window.buildTiny386Ini = function () {
+                const value = id => String((document.getElementById(id) || {}).value || '').trim();
+                const checked = id => !!((document.getElementById(id) || {}).checked);
+                const lines = [
+                    '[pc]',
+                    'bios = ' + (value('tiny-bios') || 'bios.bin'),
+                    'vga_bios = ' + (value('tiny-vga-bios') || 'vgabios.bin'),
+                    'mem_size = ' + (value('tiny-memory') || '32M'),
+                    'vga_mem_size = ' + (value('tiny-vga-memory') || '1M'),
+                ];
+                const optional = [
+                    ['linuxstart', 'tiny-linuxstart'], ['kernel', 'tiny-kernel'], ['initrd', 'tiny-initrd'],
+                    ['cmdline', 'tiny-cmdline'],
+                    ['fda', 'tiny-fda'], ['fdb', 'tiny-fdb'],
+                    ['hda', 'tiny-hda'], ['hdb', 'tiny-hdb'], ['hdc', 'tiny-hdc'], ['hdd', 'tiny-hdd'],
+                    ['cda', 'tiny-cda'], ['cdb', 'tiny-cdb'], ['cdc', 'tiny-cdc'], ['cdd', 'tiny-cdd'],
+                ];
+                optional.forEach(([key, id]) => {
+                    const v = value(id);
+                    if (v) lines.push(key + ' = ' + v);
+                });
+                lines.push('fill_cmos = ' + (checked('tiny-fill-cmos') ? '1' : '0'));
+                lines.push('vga_force_8dm = ' + (checked('tiny-vga-8dm') ? '1' : '0'));
+                lines.push('enable_serial = ' + (checked('tiny-serial') ? '1' : '0'));
+                const vendor = value('tiny-cpuid-vendor');
+                if (vendor) lines.push('cpuid_vendor = ' + vendor);
+                lines.push('', '[display]', 'width = ' + (value('tiny-width') || '640'),
+                    'height = ' + (value('tiny-height') || '480'), '', '[cpu]',
+                    'gen = ' + (value('tiny-cpu-gen') || '6'),
+                    'fpu = ' + (checked('tiny-fpu') ? '1' : '0'), '');
+                return lines.join('\n');
             };
         </script>
         <hr>
@@ -130,6 +279,12 @@
                 <div class="quick-start-row">
                     <button id="btn-quick-start" onclick="start_default_client()"
                             title="Create and boot one game client with the default settings.">Start 1 Client</button>
+                    <span>Simple mode</span>
+                    <button onclick="toggle_about()"
+                            title="Credits for beZerk Revived and Tiny386.">About</button>
+                    <span id="clientstatus"></span>
+                </div>
+                <div class="quick-start-row">
                     <label for="gameselect">Server:</label>
                     <select id="gameselect"
                             title="Which game server answers NEW connections. Games already running keep the server they started on, so switch from the title screen. Same as the console's GAME command.">
@@ -138,8 +293,6 @@
                         <option value="acro">Acrophobia</option>
                         <option value="ydkj">You Don't Know Jack: Net Show</option>
                     </select>
-                    <span>Simple mode</span>
-                    <span id="clientstatus"></span>
                 </div>
                 <details class="advanced-toolbar">
                     <summary>Advanced controls and multiplayer</summary>
@@ -165,24 +318,179 @@
                            title="Boot each PC as soon as its window is created, instead of waiting for you to press Start on each one. They share one disk download, so starting several together is no slower than starting one.">Auto-start</label>
                     <span style="margin-left: 8px;">Session setup</span>
                 </div>
+                <details class="emulator-start-settings" style="margin:6px 0; max-width:720px;">
+                    <summary>Emulator startup settings</summary>
+                    <fieldset style="margin:6px 0;">
+                        <legend>Machine</legend>
+                        <label title="Guest RAM passed to Tiny386, for example 16M, 32M, or 64M.">RAM <input id="tiny-memory" value="32M" size="7"></label>
+                        <label title="Video RAM passed to Tiny386, for example 512K or 1M.">VGA RAM <input id="tiny-vga-memory" value="1M" size="7"></label>
+                        <label title="Tiny386 CPU generation: 3=386, 4=486, 5=Pentium, 6=Pentium Pro-class.">CPU <select id="tiny-cpu-gen"><option>3</option><option>4</option><option>5</option><option selected>6</option></select></label>
+                        <label title="Enable the emulated x87 floating-point unit."><input type="checkbox" id="tiny-fpu" checked> FPU</label>
+                        <label title="Apply the Win9x CMOS compatibility workaround."><input type="checkbox" id="tiny-fill-cmos" checked> Fill CMOS</label>
+                        <label title="Force the 640-pixel text mode used by the original game images."><input type="checkbox" id="tiny-vga-8dm" checked> VGA 8-dot mode</label>
+                    </fieldset>
+                    <fieldset style="margin:6px 0;">
+                        <legend>Display</legend>
+                        <label>Width <input id="tiny-width" type="number" value="640" min="320" max="1920" size="5"></label>
+                        <label>Height <input id="tiny-height" type="number" value="480" min="200" max="1200" size="5"></label>
+                        <label title="BIOS filename or URL-relative asset already available to the page.">BIOS <input id="tiny-bios" value="bios.bin" size="16"></label>
+                        <label title="VGA BIOS filename or URL-relative asset already available to the page.">VGA BIOS <input id="tiny-vga-bios" value="vgabios.bin" size="16"></label>
+                    </fieldset>
+                    <fieldset style="margin:6px 0;">
+                        <legend>Files (blank means not mounted)</legend>
+                        <label>Linux start <input id="tiny-linuxstart" size="18"></label>
+                        <label>Kernel <input id="tiny-kernel" size="18"></label>
+                        <label>Initrd <input id="tiny-initrd" size="18"></label><br>
+                        <label title="Optional Linux kernel command line.">Cmdline <input id="tiny-cmdline" size="42"></label><br>
+                        <label>FDA <input id="tiny-fda" size="18"></label>
+                        <label>FDB <input id="tiny-fdb" size="18"></label><br>
+                        <label>HDA <input id="tiny-hda" value="win95_c_drive.img.zst" size="24"></label>
+                        <label>HDB <input id="tiny-hdb" value="win95_d_drive_all.img.zst" size="24"></label><br>
+                        <label>HDC <input id="tiny-hdc" size="24"></label>
+                        <label>HDD <input id="tiny-hdd" size="24"></label><br>
+                        <label>CDA <input id="tiny-cda" size="24"></label>
+                        <label>CDB <input id="tiny-cdb" size="24"></label><br>
+                        <label>CDC <input id="tiny-cdc" size="24"></label>
+                        <label>CDD <input id="tiny-cdd" size="24"></label><br>
+                        <label title="Enable the emulated serial device."><input type="checkbox" id="tiny-serial"> Enable serial</label>
+                        <label title="Optional CPUID vendor string exposed to the guest.">CPUID vendor <input id="tiny-cpuid-vendor" size="18"></label>
+                    </fieldset>
+                    <small>These values generate a per-client INI at startup. Referenced files must be available from the page, and changing them applies to newly started clients only.</small>
+                </details>
+                <details class="server-test-settings" style="margin:6px 0; max-width:720px;">
+                    <summary>Server test settings</summary>
                 <fieldset style="margin:6px 0; max-width:720px;">
-                    <legend>Acrophobia test settings</legend>
+                    <legend>Selected server options</legend>
+                    <label title="Enable the optional test controls for the selected game server.">
+                        <input type="checkbox" id="server-test-settings-enable"
+                               onchange="window.toggle_server_test_settings(this.checked)">
+                        Enable server test settings
+                    </label>
+                    <span id="server-test-settings-note" style="margin-left:12px; opacity:.75;"></span>
+                    <label style="margin-left:12px;" title="Skip sponsor advertisements while retaining the empty protocol handshakes needed by the Win95 clients.">
+                        <input type="checkbox" id="server-test-no-ads" disabled onchange="window.gameSettings.noAdvertisements = this.checked">
+                        No advertisements
+                    </label>
+                    <div data-server-test-panel="acro" style="margin-top:5px;">
                     <label title="Give Sparky and Mimsy 30 points when a new Acro room starts, so the face-off can be tested immediately.">
-                        <input type="checkbox" id="acro-test-bots"
+                        <input type="checkbox" id="acro-test-bots" disabled
                                onchange="window.acroSettings.testBotsAt30 = this.checked">
                         Start Sparky and Mimsy at 30 points
                     </label>
                     <label style="margin-left:12px;" title="Show the expanded Acrophobia room catalog, including the rooms documented by the original bot.">
-                        <input type="checkbox" id="acro-full-rooms"
+                        <input type="checkbox" id="acro-full-rooms" disabled
                                onchange="window.acroSettings.fullRoomList = this.checked">
                         Use full Acro room list
                     </label>
                     <label style="margin-left:12px;" title="Leave an equal face-off result tied instead of awarding it to the first finalist.">
-                        <input type="checkbox" id="acro-faceoff-tie"
+                        <input type="checkbox" id="acro-faceoff-tie" disabled
                                onchange="window.acroSettings.allowFaceoffTie = this.checked">
                         Allow face-off ties
                     </label>
+                    </div>
+                    <div data-server-test-panel="gtp" style="margin-top:5px;" hidden>
+                    <label title="Scale Get The Picture timers for testing. The game still receives matching countdown values.">
+                        Timer speed:
+                        <select id="gtp-test-time" disabled onchange="window.gtpSettings.timeScale = Number(this.value); window.gtpTimeScale = Number(this.value);">
+                            <option value="1">Normal</option>
+                            <option value="0.25">4x faster</option>
+                            <option value="0.05">20x faster</option>
+                        </select>
+                    </label>
+                    <label style="margin-left:12px;" title="Force every composition round to a known variant for protocol testing.">
+                        Variant:
+                        <select id="gtp-test-variant" disabled onchange="window.gtpSettings.forcedVariant = this.value; if (typeof window.gtpVariant === 'function') window.gtpVariant(this.value === '' ? null : Number(this.value));">
+                            <option value="">Normal</option>
+                            <option value="0">Plain</option>
+                            <option value="2">Slimericks</option>
+                            <option value="3">Copyfits</option>
+                        </select>
+                    </label>
+                    <label style="margin-left:12px;" title="Force the no-caption result path so it can be tested without waiting for every player.">
+                        <input type="checkbox" id="gtp-test-empty-caption" disabled onchange="window.gtpSettings.forceNobodyComposed = this.checked; if (typeof window.gtpNobodyComposed === 'function') window.gtpNobodyComposed(this.checked ? true : null);">
+                        Force no-caption result
+                    </label>
+                    </div>
+                    <div data-server-test-panel="cosmic" style="margin-top:5px;" hidden>
+                    <label title="Enable Cosmic Consensus storm/insurance events.">
+                        <input type="checkbox" id="cosmic-test-storms" disabled checked onchange="window.set_cosmic_test_setting('storms', this.checked)">
+                        Enable storms
+                    </label>
+                    <label style="margin-left:12px;" title="Include single-word fill-in questions in the question rotation.">
+                        <input type="checkbox" id="cosmic-test-single-word" disabled checked onchange="window.set_cosmic_test_setting('singleWordQuestions', this.checked)">
+                        Single-word questions
+                    </label>
+                    <label style="margin-left:12px;" title="Use the open-ended text-entry layout for single-word questions; turn off to test the house-word multiple-choice layout.">
+                        <input type="checkbox" id="cosmic-test-single-word-open" disabled checked onchange="window.set_cosmic_test_setting('singleWordOpenEnded', this.checked)">
+                        Single-word text entry
+                    </label>
+                    <label style="margin-left:12px;" title="Force the first question after a segment starts to use the single-word format when available.">
+                        <input type="checkbox" id="cosmic-test-first-single-word" disabled checked onchange="window.set_cosmic_test_setting('firstQuestionSingleWord', this.checked)">
+                        First question single-word
+                    </label>
+                    <label style="margin-left:12px;" title="Send question text after the pyramid-build animation instead of before it.">
+                        <input type="checkbox" id="cosmic-test-text-after-build" disabled checked onchange="window.set_cosmic_test_setting('questionTextAfterBuild', this.checked)">
+                        Text after build
+                    </label>
+                    <br>
+                    <label title="Filter the question bank to questions with four answers. Useful for testing the standard answer layout.">
+                        <input type="checkbox" id="cosmic-test-four-answer" disabled onchange="window.set_cosmic_test_setting('fourAnswerOnly', this.checked)">
+                        Four-answer questions only
+                    </label>
+                    <label style="margin-left:12px;" title="Use the pyramid-build probe timing path.">
+                        <input type="checkbox" id="cosmic-test-build-probe" disabled checked onchange="window.set_cosmic_test_setting('pyramidBuildProbe', this.checked)">
+                        Pyramid build probe
+                    </label>
+                    <label style="margin-left:12px;" title="Enable the experimental KALOOP heartbeat packet path.">
+                        <input type="checkbox" id="cosmic-test-kaloop" disabled onchange="window.set_cosmic_test_setting('kaloopHeartbeat', this.checked)">
+                        KALOOP heartbeat
+                    </label>
+                    <br>
+                    <label title="Enable the experimental JGS packet sent before a question.">
+                        <input type="checkbox" id="cosmic-test-jgs" disabled onchange="window.set_cosmic_test_setting('jgsPackets', this.checked)">
+                        JGS packets
+                    </label>
+                    <label style="margin-left:12px;" title="Enable the experimental preflight question packets.">
+                        <input type="checkbox" id="cosmic-test-preflight" disabled onchange="window.set_cosmic_test_setting('preflightQuestions', this.checked)">
+                        Preflight questions
+                    </label>
+                    <label style="margin-left:12px;" title="Choose which question packet form Cosmic sends to the emulator.">
+                        Packet mode:
+                        <select id="cosmic-test-packet-mode" disabled onchange="window.set_cosmic_test_setting('questionPacketMode', this.value)">
+                            <option value="QT">QT</option>
+                            <option value="QT_PLUS_AQ">QT + AQ</option>
+                            <option value="AQ_ONLY">AQ only</option>
+                        </select>
+                    </label>
+                    <br>
+                    <label title="Include the automatic PRS result burst packets.">
+                        <input type="checkbox" id="cosmic-test-auto-prs" disabled checked onchange="window.set_cosmic_test_setting('autoIncludePrs', this.checked)">
+                        Automatic PRS results
+                    </label>
+                    <label style="margin-left:12px;" title="Clear unused answer slots when sending a question.">
+                        <input type="checkbox" id="cosmic-test-clear-answer" disabled onchange="window.set_cosmic_test_setting('clearUnusedAnswerSlots', this.checked)">
+                        Clear unused answer slots
+                    </label>
+                    <label style="margin-left:12px;" title="Clear unused result slots in the results packet.">
+                        <input type="checkbox" id="cosmic-test-clear-result" disabled onchange="window.set_cosmic_test_setting('clearUnusedResultSlots', this.checked)">
+                        Clear unused result slots
+                    </label>
+                    <br>
+                    <label title="Avoid placing the consensus winner in the final pyramid slot.">
+                        <input type="checkbox" id="cosmic-test-avoid-winner" disabled checked onchange="window.set_cosmic_test_setting('avoidFinalSlotWinner', this.checked)">
+                        Avoid final-slot winner
+                    </label>
+                    <label style="margin-left:12px;" title="Continue into a new segment after the end-game sequence.">
+                        <input type="checkbox" id="cosmic-test-loop-endgame" disabled checked onchange="window.set_cosmic_test_setting('loopAfterEndgame', this.checked)">
+                        Loop after end game
+                    </label>
+                    <label style="margin-left:12px;" title="Enable the experimental command-lab game path.">
+                        <input type="checkbox" id="cosmic-test-lab" disabled onchange="window.set_cosmic_test_setting('commandLabMode', this.checked)">
+                        Command lab mode
+                    </label>
+                    </div>
                 </fieldset>
+                </details>
                 <div class="controls-row">
                     <button id="btn-log" onclick="toggle_log()"
                             title="Show or hide the log panel. It keeps recording either way, so nothing is missed while hidden.">Show Log</button>
@@ -194,8 +502,6 @@
                             title="Reload ALL game servers and the shared HTTP server without restarting the emulators. Keeps whichever server the dropdown has selected. Applies to new connections; exit to the room list and rejoin to pick it up.">Reload Servers</button>
                     <button id="btn-reload-ui" onclick="reload_ui()"
                             title="Re-fetch ui.js and rebuild every client window's controls, WITHOUT restarting the emulators. The live canvas is moved into the new markup, so the VMs keep running. Use this after editing ui.js; changes to index.html itself still need a page refresh.">Reload UI</button>
-                    <button onclick="toggle_about()"
-                            title="Credits for beZerk Revived and Tiny386.">About</button>
                 </div>
                 <div class="controls-row" id="gtp-tools-row">
                     <label for="btn-droodle">Get The Picture tools:</label>
@@ -213,14 +519,18 @@
                             <option value="host">Host a room</option>
                             <option value="guest">Join a host</option>
                         </select>
+                        <span id="p2p-status">Local-only network</span>
+                    </div>
+                    <div class="controls-row">
                         <button id="p2p-offer" title="Create a host offer code to send to the guest.">New host offer</button>
                         <button id="p2p-answer" title="Create the guest answer after pasting the host offer.">Create guest answer</button>
                         <button id="p2p-apply" title="Apply the guest answer pasted into the remote box.">Apply host answer</button>
                         <button id="p2p-copy" title="Copy the current signaling code to the clipboard.">Copy code</button>
                         <button id="p2p-paste" title="Paste a signaling code from the clipboard into the remote box.">Paste code</button>
+                    </div>
+                    <div class="controls-row">
                         <button id="p2p-share-host" title="Create a shareable link containing the host offer.">Share host link</button>
                         <button id="p2p-share-answer" title="Copy a link containing the guest answer for the host.">Copy answer link</button>
-                        <span id="p2p-status">Local-only network</span>
                     </div>
                     <div class="controls-row">
                         <label for="p2p-remote">Paste remote:</label>
@@ -238,11 +548,16 @@
                 <fieldset style="margin-top:4px; max-width:760px;">
                     <div class="controls-row">
                         <button id="ydkj-p2p-start" title="Start sharing the host YDKJ screen and audio with connected players.">Start host screen stream</button>
+                    </div>
+                    <div class="controls-row">
+                        <span id="ydkj-p2p-status">P2P connection required; start a YDKJ emulator, then choose the host stream option.</span>
+                    </div>
+                    <div class="controls-row">
+                        <span>Buzzer:</span>
                         <button data-ydkj-buzzer="Q" disabled title="Send the Q buzzer to the YDKJ host.">Q</button>
                         <button data-ydkj-buzzer="B" disabled title="Send the B buzzer to the YDKJ host.">B</button>
                         <button data-ydkj-buzzer="P" disabled title="Send the P buzzer to the YDKJ host.">P</button>
                         <button data-ydkj-screw disabled title="Send the Screw action to the YDKJ host.">Screw (S)</button>
-                        <span id="ydkj-p2p-status">Start a YDKJ emulator, then choose the host stream option.</span>
                     </div>
                     <div class="controls-row">
                         <span>Answer:</span>
@@ -253,7 +568,7 @@
                     </div>
                     <video id="ydkj-remote-video" hidden autoplay muted playsinline
                            style="display:block; max-width:720px; width:100%; background:#000; margin-top:6px;"></video>
-                    <small>Guests must buzz successfully before their 1–4 answer buttons unlock. Submitting an answer locks them again for the next question.</small>
+                    <small>P2P connection required. Guests must buzz successfully before their 1–4 answer buttons unlock. Submitting an answer locks them again for the next question.</small>
                 </fieldset>
                 </details>
                 <textarea id="logarea" rows="10" cols="98" style="font-family: monospace; background: inherit; display: none;" readonly></textarea>
@@ -291,10 +606,11 @@
                     <a href="https://discord.gg/MVEsDC2UXy" target="_blank" rel="noopener">Join the Discord</a>
                 </p>
                 <hr>
-                <p><strong>Tiny386</strong> &mdash; 386 PC emulator, compiled to WebAssembly</p>
+                <p><strong>Tiny386</strong> - 386 PC emulator, compiled to WebAssembly</p>
                 <ul>
                     <li>hchunhui</li>
                 </ul>
+                <p><a href="https://github.com/hchunhui/tiny386" target="_blank" rel="noopener">Tiny386 source on GitHub</a></p>
                 <div style="text-align: right; margin-top: 12px;">
                     <button onclick="toggle_about()" title="Close">OK</button>
                 </div>
@@ -674,7 +990,10 @@
                     if (inifile == 'linux-amd64.ini') wasm_name = 'tinyamd64.wasm';
                     // The player field is no longer written into the guest
                     // registry. The disk image is passed through untouched.
-                    c.inst = get_tiny386(c.canvas, wasm_name);
+                    c.inst = get_tiny386(c.canvas, wasm_name, {
+                        iniText: typeof window.buildTiny386Ini === 'function'
+                            ? window.buildTiny386Ini() : null,
+                    });
                     if (inifile === 'win95ns.ini' && window.ydkjP2P &&
                         typeof window.ydkjP2P.setHostInstance === 'function') {
                         window.ydkjP2P.setHostInstance(c.canvas, c.inst);
@@ -890,6 +1209,7 @@
                     const prompt = document.getElementById('consoleprompt');
                     if (prompt) prompt.textContent = String(profile || 'cosmic') + '>';
                     syncDroodleButton();
+                    if (window.update_server_test_settings) window.update_server_test_settings();
                     if (window.ydkjP2P && typeof window.ydkjP2P.refreshUi === 'function') {
                         window.ydkjP2P.refreshUi();
                     }
@@ -910,6 +1230,7 @@
                     }
                     window.setActiveGameProfile(want);
                     syncDroodleButton();
+                    if (window.update_server_test_settings) window.update_server_test_settings();
                     if (window.ydkjP2P && typeof window.ydkjP2P.refreshUi === 'function') {
                         window.ydkjP2P.refreshUi();
                     }
@@ -926,6 +1247,7 @@
                     window.onActiveGameProfileChange(profile);
                 }
                 syncDroodleButton();
+                if (window.update_server_test_settings) window.update_server_test_settings();
             }
 
             {
@@ -1122,7 +1444,7 @@
                   if (MODIFIERS.has(key))
                       tip.push('click to hold for the next key, click again to '
                              + 'lock it down, once more to release');
-                  if (tip.length) btn.title = tip.join(' — ');
+                  if (tip.length) btn.title = tip.join(' - ');
                   btn.setAttribute('data-val', key);
                   rowEl.appendChild(btn);
               });

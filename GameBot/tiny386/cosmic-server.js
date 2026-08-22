@@ -124,6 +124,18 @@ let nextHttpPlayerId = 1000;
 // Simple user store: player_name -> player_id
 // HTTP_ACCEPT_ANY_LOGIN = true means any username/password is accepted
 const HTTP_ACCEPT_ANY_LOGIN = true;
+const NO_AD_FILE = 'nad000.srf';
+// A zero-byte SRF is rejected by the Win95 downloader before it sends its AI
+// acknowledgement. Keep the no-ad filename on the wire, but serve a known-
+// valid local SRF payload behind it until a genuinely blank SRF is available.
+// The generated blank candidate is now a real SRF container.  Keep the
+// filename on the wire so the legacy client accepts the response, while
+// allowing the builder output to be tested directly.
+const NO_AD_RESOURCE = 'nad000.srf';
+function cosmicNoAdvertisements() {
+  return !!(typeof window !== 'undefined' && window.gameSettings
+    && window.gameSettings.noAdvertisements);
+}
 const httpUsers = new Map();
 // CosmicConsensus.exe authenticates over HTTP, then opens IRC and sends its
 // saved registry profile in the L line. Keep the short-lived HTTP names so
@@ -190,7 +202,9 @@ async function tryStatic(urlPath) {
 async function tryAdFile(urlPath) {
   const filename = urlPath.split('/').filter(Boolean).pop();
   if (!filename) return null;
-  const fileUrl = HTTP_ADS_ROOT + '/' + filename;
+  const resource = filename.toLowerCase() === NO_AD_FILE
+    ? NO_AD_RESOURCE : filename;
+  const fileUrl = HTTP_ADS_ROOT + '/' + resource;
   let resp;
   try {
     resp = await fetch(fileUrl, { cache: 'no-store' });
@@ -1087,7 +1101,8 @@ function makeBirLine(roomName, displayName = '', opts = {}) {
 }
 
 const MAX_ANSWER_SLOTS = 4;
-const USE_ONLY_FOUR_ANSWER_QUESTIONS = false;
+let USE_ONLY_FOUR_ANSWER_QUESTIONS = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.fourAnswerOnly);
 
 // Live game connections, so the lobby's room selector can report real
 // occupancy instead of the hardcoded 0 this used to send.
@@ -1181,7 +1196,8 @@ function broadcastRoomListUpdate(roomName = null) {
 // QT_I1 must stay 1/2/3 for the MULTIPLE-CHOICE layouts, which load a
 // 1step/2steps/3steps.srf graphic from it; the open-ended layouts (3 and 4)
 // don't, which is how the Blowout gets away with 6.
-const SINGLE_WORD_QUESTIONS_ENABLED = true;
+let SINGLE_WORD_QUESTIONS_ENABLED = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.singleWordQuestions === false);
 // Share of ordinary rounds that use a single-word question, when any are
 // loaded. Kept a minority: they are a change of pace, not the main game.
 const SINGLE_WORD_QUESTION_CHANCE = 0.25;
@@ -1190,14 +1206,17 @@ const SINGLE_WORD_QUESTION_CHANCE = 0.25;
 // SINGLE_WORD_QUESTION_CHANCE to land. Set false for normal play.
 // Send QT/QATB/QATI/QATE immediately before ST+QS rather than ~10 s earlier,
 // right after ADLE. Only affects round 1 of a segment; see sendQuestion().
-const QT_AFTER_PYRAMID_BUILD = true;
-const FORCE_FIRST_QUESTION_SINGLE_WORD = true;
+let QT_AFTER_PYRAMID_BUILD = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.questionTextAfterBuild === false);
+let FORCE_FIRST_QUESTION_SINGLE_WORD = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.firstQuestionSingleWord === false);
 // true  -> send single-word rounds as open-ended text entry (QT step 1, mode 4)
 // false -> send them as an ordinary 3-answer multiple choice, using the house
 //          answers from qanda.txt. Diagnostic: the open-ended round is not
 //          drawing, and this is the one switch that tells us whether the cause
 //          is the open-ended layout or the question itself.
-const SINGLE_WORD_OPEN_ENDED = true;
+let SINGLE_WORD_OPEN_ENDED = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.singleWordOpenEnded === false);
 // Open-ended (text-entry) layout. 3 and 4 are BOTH open-ended and the Question
 // ctor accepts either here, but they are two different SCREENS:
 //
@@ -1267,12 +1286,18 @@ const BLOWOUT_POST_BS_ADBREAK_SECONDS = 40;
 // BS duration covers the whole blowout window (ads + question + result + EGS).
 const BLOWOUT_BS_WINDOW_MS = 600000;
 const BLOWOUT_AD_ACK_TIMEOUT_SECONDS = 52; // matches Python; 35 gave up too early
-const COMMAND_LAB_MODE = false;
-const AUTO_INCLUDE_PRS = true;
-const QUESTION_PACKET_MODE = 'QT'; // QT, QT_PLUS_AQ, or AQ_ONLY
-const CLEAR_UNUSED_ANSWER_SLOTS = false;
-const CLEAR_UNUSED_RESULT_SLOTS = false;
-const AVOID_FINAL_SLOT_CONSENSUS_WINNER = true;
+let COMMAND_LAB_MODE = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.commandLabMode);
+let AUTO_INCLUDE_PRS = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.autoIncludePrs === false);
+let QUESTION_PACKET_MODE = (typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.questionPacketMode) || 'QT';
+let CLEAR_UNUSED_ANSWER_SLOTS = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.clearUnusedAnswerSlots);
+let CLEAR_UNUSED_RESULT_SLOTS = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.clearUnusedResultSlots);
+let AVOID_FINAL_SLOT_CONSENSUS_WINNER = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.avoidFinalSlotWinner === false);
 
 // FALSE, matching cosmic_v64_web.py. When true this adds a second IQ award on
 // top of the tile IQ every single round -- PROTOTYPE_BIP_DELTAS is up to 55 per
@@ -1309,7 +1334,8 @@ const NGS_BUILD_DURATION_MS = 12000;
 // mid-build cannot wedge the round forever.
 const PYRAMID_BUILD_SETTLE_MS = 4000;
 const PYRAMID_BUILD_PONG_TIMEOUT_MS = 15000;
-const PYRAMID_BUILD_PROBE_ENABLED = true;
+let PYRAMID_BUILD_PROBE_ENABLED = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.pyramidBuildProbe === false);
 const QRS_CLIMB_DURATION_MS = 3000;
 // Spacing between consecutive PRS climb frames. Each PRS starts its own
 // QRS_CLIMB_DURATION_MS animation, so frames must be spaced by at least that
@@ -1368,7 +1394,8 @@ const KEEPALIVE_MISSES_BEFORE_DEAD = 3;
 
 // ST in a whole game, every one event-driven. IRC PING/PONG keeps the socket
 // alive regardless. Flip true only to test whether client state depends on it.
-const KALOOP_HEARTBEAT_ENABLED = false;
+let KALOOP_HEARTBEAT_ENABLED = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.kaloopHeartbeat);
 // End-of-game pacing. Reference EGS trailer: "EGS S 0 582074 546074 30000 0",
 // so reveal_at - elapsed - visible = 6000 dwell. Two heartbeats precede it
 // (+9769 then +7258 off the blowout PRS).
@@ -1379,21 +1406,25 @@ const ENDGAME_EGS_LEAD_SECONDS = 7;
 const ENDGAME_EGS_WAIT_SECONDS = 45;
 // Whether to loop into a brand new pyramid segment after EGS. The reference
 // keeps going rather than stopping at the end-game screen.
-const LOOP_NEW_SEGMENT_AFTER_EGS = true;
+let LOOP_NEW_SEGMENT_AFTER_EGS = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.loopAfterEndgame === false);
 
 const ROUNDS_PER_SEGMENT_MIN = 3; // eslint-disable-line no-unused-vars -- kept for parity with the Python source
 const ROUNDS_PER_SEGMENT_MAX = 4; // eslint-disable-line no-unused-vars
 
 // Storm system enabled -- see module docstring above.
-const STORM_SYSTEM_ENABLED = true;
+let STORM_SYSTEM_ENABLED = !(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.storms === false);
 const STORM_ROUND_IN_SEGMENT = 2;   // fires once roundInSegment reaches this
 const STORM_INSURANCE_COST = 15;    // IQ points spent to buy insurance
 const STORM_INSURANCE_WINDOW_SECONDS = 25; // player's/bots' time to decide
 const STORM_BOT_BUY_CHANCE = 0.5;   // chance a bot with enough IQ buys in
 const STORM_TYPES = ['ION', 'METEOR', 'TORNADO']; // wire code = index
 
-const JGS_ENABLED = false;
-const PREFLIGHT_QS_ENABLED = false;
+let JGS_ENABLED = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.jgsPackets);
+let PREFLIGHT_QS_ENABLED = !!(typeof window !== 'undefined'
+  && window.cosmicSettings && window.cosmicSettings.preflightQuestions);
 
 // Fallback question, used only if the real question-bank text files
 // aren't reachable via fetch() at static/bigidea/qanda/74_textholder1.txt /
@@ -2776,6 +2807,7 @@ class GameClient {
 
   async sendBlowoutAds(primaryAdFile = null, sessionGeneration = null) {
     if (sessionGeneration !== null && !this.activeSession(sessionGeneration)) return [];
+    if (cosmicNoAdvertisements()) return [];
 
     const elapsed = this.roomStartTime === null ? 0 : Date.now() - this.roomStartTime;
     // SA's trailer is the same "S 0 <reveal_at> <elapsed> <duration> 0" shape
@@ -3345,6 +3377,13 @@ class GameClient {
    * that timing, not SPA, is what matters here.
    */
   async sendFreshAdList() {
+    if (cosmicNoAdvertisements()) {
+      this.currentSegmentAds = [NO_AD_FILE];
+      await this.botPriv(this.clientIrcName, `ADLB 1`);
+      await this.botPriv(this.clientIrcName, `ADLI 0 Ad ${NO_AD_FILE} ${NO_AD_FILE} 0`);
+      await this.botPriv(this.clientIrcName, 'ADLE');
+      return;
+    }
     const picks = [];
     for (let i = 0; i < 8 && picks.length < 4; i++) {
       const cand = normalizeAdFilename(pickRandomAd());
@@ -4214,7 +4253,7 @@ class GameClient {
     // No EGS bumper here. The "BS -> EGS -> SA" ordering was never observed in
     // a real capture; EGS belongs only at the true end of the game, after the
     // Blowout round resolves.
-    await sleep(BLOWOUT_POST_BS_ADBREAK_SECONDS * 1000);
+    if (!cosmicNoAdvertisements()) await sleep(BLOWOUT_POST_BS_ADBREAK_SECONDS * 1000);
     if (!this.activeSession(sessionGeneration)) {
       console.log('[game] STAT: Client disconnected during explosion -- suppressing ad/restart.');
       return;
@@ -4226,10 +4265,11 @@ class GameClient {
     const primaryAd = (this.currentSegmentAds && this.currentSegmentAds.length)
       ? this.currentSegmentAds[0]
       : null;
-    const ads = await this.sendBlowoutAds(primaryAd, sessionGeneration);
+    const ads = cosmicNoAdvertisements()
+      ? [] : await this.sendBlowoutAds(primaryAd, sessionGeneration);
     // Set AFTER the SA broadcast, or botPriv's HOST loop filters the host out
     // of its own ad sequence.
-    this.adAckPending = true;
+    this.adAckPending = !cosmicNoAdvertisements();
     let waited = 0;
     while (this.adAckPending && waited < BLOWOUT_AD_ACK_TIMEOUT_SECONDS) {
       if (!this.activeSession(sessionGeneration)) {
@@ -4648,11 +4688,12 @@ class GameClient {
       const raw = `:${BOT_NICK}!${BOT_NICK}@${SERVER_NAME} PRIVMSG ${this.clientIrcName} :`;
       await this.sendRaw(`${raw}ST S 0 0 0 0 0`);
       await this.sendRaw(`${raw}RU ${this.room.roomInfoLine}`);
-      await this.sendRaw(`${raw}SPA Ad ${ad} ${ad} 0`);
+      const offeredAd = cosmicNoAdvertisements() ? NO_AD_FILE : ad;
+      await this.sendRaw(`${raw}SPA Ad ${offeredAd} ${offeredAd} 0`);
 
       const blowoutAds = ['air212.srf', 'usr135.srf', 'hug173.srf', 'voc213.srf'];
       const uniqueAds = [];
-      for (const a of [ad, secondaryAd, ...blowoutAds]) {
+      for (const a of (cosmicNoAdvertisements() ? [NO_AD_FILE] : [ad, secondaryAd, ...blowoutAds])) {
         const aNorm = normalizeAdFilename(a);
         if (!uniqueAds.includes(aNorm)) uniqueAds.push(aNorm);
       }
@@ -4661,6 +4702,7 @@ class GameClient {
         await this.sendRaw(`${raw}ADLI ${idx} Ad ${uniqueAds[idx]} ${uniqueAds[idx]} 0`);
       }
       await this.sendRaw(`${raw}ADLE`);
+      if (cosmicNoAdvertisements()) this.adAckPending = false;
 
       this.startKaloop(this.sessionGeneration);
     } else {
@@ -5639,6 +5681,80 @@ async function consoleExec(line, print) {
 
 window.getActiveGameProfile = () => activeGameProfile;
 window.setActiveGameProfile = setGameProfile;
+window.cosmicApplySettings = (settings = {}) => {
+  if (Object.prototype.hasOwnProperty.call(settings, 'storms')) {
+    STORM_SYSTEM_ENABLED = !!settings.storms;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'singleWordQuestions')) {
+    SINGLE_WORD_QUESTIONS_ENABLED = !!settings.singleWordQuestions;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'singleWordOpenEnded')) {
+    SINGLE_WORD_OPEN_ENDED = !!settings.singleWordOpenEnded;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'firstQuestionSingleWord')) {
+    FORCE_FIRST_QUESTION_SINGLE_WORD = !!settings.firstQuestionSingleWord;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'questionTextAfterBuild')) {
+    QT_AFTER_PYRAMID_BUILD = !!settings.questionTextAfterBuild;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'fourAnswerOnly')) {
+    USE_ONLY_FOUR_ANSWER_QUESTIONS = !!settings.fourAnswerOnly;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'pyramidBuildProbe')) {
+    PYRAMID_BUILD_PROBE_ENABLED = !!settings.pyramidBuildProbe;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'autoIncludePrs')) {
+    AUTO_INCLUDE_PRS = !!settings.autoIncludePrs;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'clearUnusedAnswerSlots')) {
+    CLEAR_UNUSED_ANSWER_SLOTS = !!settings.clearUnusedAnswerSlots;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'clearUnusedResultSlots')) {
+    CLEAR_UNUSED_RESULT_SLOTS = !!settings.clearUnusedResultSlots;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'avoidFinalSlotWinner')) {
+    AVOID_FINAL_SLOT_CONSENSUS_WINNER = !!settings.avoidFinalSlotWinner;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'loopAfterEndgame')) {
+    LOOP_NEW_SEGMENT_AFTER_EGS = !!settings.loopAfterEndgame;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'commandLabMode')) {
+    COMMAND_LAB_MODE = !!settings.commandLabMode;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'kaloopHeartbeat')) {
+    KALOOP_HEARTBEAT_ENABLED = !!settings.kaloopHeartbeat;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'jgsPackets')) {
+    JGS_ENABLED = !!settings.jgsPackets;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'preflightQuestions')) {
+    PREFLIGHT_QS_ENABLED = !!settings.preflightQuestions;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'questionPacketMode')) {
+    const mode = String(settings.questionPacketMode || 'QT').toUpperCase();
+    if (['QT', 'QT_PLUS_AQ', 'AQ_ONLY'].includes(mode)) QUESTION_PACKET_MODE = mode;
+  }
+  console.log('[game] Cosmic test settings applied');
+  return {
+    storms: STORM_SYSTEM_ENABLED,
+    singleWordQuestions: SINGLE_WORD_QUESTIONS_ENABLED,
+    singleWordOpenEnded: SINGLE_WORD_OPEN_ENDED,
+    firstQuestionSingleWord: FORCE_FIRST_QUESTION_SINGLE_WORD,
+    questionTextAfterBuild: QT_AFTER_PYRAMID_BUILD,
+    fourAnswerOnly: USE_ONLY_FOUR_ANSWER_QUESTIONS,
+    pyramidBuildProbe: PYRAMID_BUILD_PROBE_ENABLED,
+    autoIncludePrs: AUTO_INCLUDE_PRS,
+    clearUnusedAnswerSlots: CLEAR_UNUSED_ANSWER_SLOTS,
+    clearUnusedResultSlots: CLEAR_UNUSED_RESULT_SLOTS,
+    avoidFinalSlotWinner: AVOID_FINAL_SLOT_CONSENSUS_WINNER,
+    loopAfterEndgame: LOOP_NEW_SEGMENT_AFTER_EGS,
+    commandLabMode: COMMAND_LAB_MODE,
+    kaloopHeartbeat: KALOOP_HEARTBEAT_ENABLED,
+    jgsPackets: JGS_ENABLED,
+    preflightQuestions: PREFLIGHT_QS_ENABLED,
+    questionPacketMode: QUESTION_PACKET_MODE,
+  };
+};
 window.cosmicConsole = {
   exec: consoleExec,
   help: consoleHelpFor,

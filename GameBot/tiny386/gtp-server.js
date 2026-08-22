@@ -426,6 +426,11 @@ const GTP_ROOM_NO_AUTOPICK = false;
 // The trailing int is an ad code -- the test data uses 11981 and 12678, Cosmic
 // sends 0. 0 is what is proven end to end on this engine, so 0 it is.
 const GTP_SEND_ADS = true;
+const GTP_NO_AD_FILE = 'nad000.srf';
+function gtpNoAdvertisements() {
+  return !!(typeof window !== 'undefined' && window.gameSettings
+    && window.gameSettings.noAdvertisements);
+}
 // This field is the ad display duration in milliseconds, not an ad code.
 // Python and Cosmic both use six seconds here; zero leaves bumper ad slots
 // blank on the Win95 client.
@@ -570,7 +575,15 @@ const GTP_FINAL_VARIANT_IDS = [
 // variants get empty strings, exactly as the reference harness sends.
 // Pinned by gtpVariant(n) so one variant can be tested on every round instead
 // of only on round 7. null means normal play: 0 for rounds 1-6, random for 7.
-let GTP_FORCED_VARIANT = null;
+let GTP_FORCED_VARIANT = (typeof window !== 'undefined'
+  && window.gtpSettings && window.gtpSettings.enabled
+  && window.gtpSettings.forcedVariant !== '')
+  ? Number(window.gtpSettings.forcedVariant) : null;
+if (typeof window !== 'undefined' && window.gtpSettings
+    && window.gtpSettings.enabled) {
+  const savedScale = Number(window.gtpSettings.timeScale);
+  if (Number.isFinite(savedScale) && savedScale > 0) window.gtpTimeScale = savedScale;
+}
 
 const GTP_COPYFITS_WORDS = [
   ['TREE', 'LABOR', 'SUAVE'], ['WIND', 'FACE', 'ROOFING'],
@@ -1430,6 +1443,10 @@ function gtpResetFatChance(room) {
 }
 
 async function gtpSendBumper(room, number, generation) {
+  if (gtpNoAdvertisements()) {
+    gtpLog(`STAT: bumper ${number} skipped -- advertisements disabled.`);
+    return 0;
+  }
   const ad = gtpBumperAd(room);
   if (!ad) {
     gtpLog(`STAT: bumper ${number} skipped -- no downloaded ad is available.`);
@@ -2023,7 +2040,10 @@ function gtpCurrent() {
  * Override for CLB's bool. null = derive it (true only when no captions came
  * in); set true/false from devtools with gtpNobodyComposed() to test it.
  */
-let GTP_CLB_FLAG = null;
+let GTP_CLB_FLAG = (typeof window !== 'undefined'
+  && window.gtpSettings && window.gtpSettings.enabled
+  && window.gtpSettings.forceNobodyComposed)
+  ? true : null;
 
 /** How many recent messages to keep per client for the drop-out report. */
 const GTP_TAIL_KEEP = 8;
@@ -2960,7 +2980,7 @@ class GtpClient {
     await this.botPriv(`RU ${gtpRoomRecord(room)}`);
     if (!alive()) return;
 
-    if (GTP_SEND_ADS) {
+    if (GTP_SEND_ADS && !gtpNoAdvertisements()) {
       // Match Python's immediate local ad selection.  Waiting for the async
       // manifest fetch here delayed the roster and left the Win95 client on
       // the entry screen long enough to disconnect.  The fetch still updates
@@ -2990,6 +3010,16 @@ class GtpClient {
       if (!alive()) return;
       this.adsHave = [...new Set(this.adsHave.concat(list))];
       gtpLog(`STAT: sponsor ad "${sponsor}" offered; the client should GET /picture/content/ads/${sponsor}.`);
+    } else if (GTP_SEND_ADS) {
+      // Use the local zero-byte placeholder rather than a real sponsor. The
+      // client still performs its normal download/ack path, but displays no
+      // advertisement and never needs a missing filename fallback.
+      await this.botPriv(`SPA ${gtpAdRecord(GTP_NO_AD_FILE)}`);
+      await this.botPriv(`ADLB 1`);
+      if (!alive()) return;
+      await this.botPriv(`ADLI 0 ${gtpAdRecord(GTP_NO_AD_FILE)}`);
+      await this.botPriv('ADLE');
+      gtpLog(`STAT: advertisements disabled; offered ${GTP_NO_AD_FILE}.`);
     }
 
     if (room.running) {
